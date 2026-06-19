@@ -6,11 +6,18 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-INPUT_FILE = (
+PICKUPS_FILE = (
     PROJECT_ROOT
     / "data"
     / "processed"
     / "hourly_pickups.parquet"
+)
+
+WEATHER_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "hourly_weather.parquet"
 )
 
 OUTPUT_FILE = (
@@ -27,13 +34,59 @@ LAGS = [
     336,
 ]
 
+WEATHER_COLUMNS = [
+    "temperature_c",
+    "apparent_temperature_c",
+    "relative_humidity_pct",
+    "precipitation_mm",
+    "wind_speed_kmh",
+    "weather_code",
+]
+
+
+def add_weather(
+    pickups: pd.DataFrame,
+    weather: pd.DataFrame,
+) -> pd.DataFrame:
+    """Join one citywide weather observation to each station-hour."""
+
+    features = pickups.merge(
+        weather,
+        on="timestamp",
+        how="left",
+        validate="many_to_one",
+    )
+
+    missing_weather = features[
+        WEATHER_COLUMNS
+    ].isna().sum()
+
+    if missing_weather.any():
+        raise ValueError(
+            "Missing weather values after timestamp join:\n"
+            f"{missing_weather[missing_weather > 0]}"
+        )
+
+    features["is_precipitating"] = (
+        features["precipitation_mm"] > 0
+    ).astype("int8")
+
+    return features
+
 
 def build_features(
     pickups: pd.DataFrame,
+    weather: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Create calendar and historical-demand features."""
+    """Create weather, calendar, and historical-demand features."""
+
+    features = add_weather(
+        pickups,
+        weather,
+    )
+
     features = (
-        pickups.sort_values(
+        features.sort_values(
             ["station_id", "timestamp"]
         )
         .reset_index(drop=True)
@@ -119,14 +172,31 @@ def build_features(
 
 def main() -> None:
     """Build and save the model feature table."""
-    if not INPUT_FILE.exists():
+
+    if not PICKUPS_FILE.exists():
         raise FileNotFoundError(
-            f"Processed data not found: {INPUT_FILE}\n"
+            f"Pickup data not found: {PICKUPS_FILE}\n"
             "Run src/data/make_dataset.py first."
         )
 
-    pickups = pd.read_parquet(INPUT_FILE)
-    features = build_features(pickups)
+    if not WEATHER_FILE.exists():
+        raise FileNotFoundError(
+            f"Weather data not found: {WEATHER_FILE}\n"
+            "Run src/data/make_weather_dataset.py first."
+        )
+
+    pickups = pd.read_parquet(
+        PICKUPS_FILE,
+    )
+
+    weather = pd.read_parquet(
+        WEATHER_FILE,
+    )
+
+    features = build_features(
+        pickups,
+        weather,
+    )
 
     features.to_parquet(
         OUTPUT_FILE,
@@ -141,6 +211,9 @@ def main() -> None:
         f"Feature range: "
         f"{features['timestamp'].min()} through "
         f"{features['timestamp'].max()}"
+    )
+    print(
+        f"Columns: {len(features.columns)}"
     )
     print(
         f"Missing values: "

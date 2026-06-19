@@ -24,7 +24,7 @@ CATEGORICAL_FEATURES = [
     "station_id",
 ]
 
-NUMERIC_FEATURES = [
+BASE_NUMERIC_FEATURES = [
     "hour",
     "day_of_week",
     "month",
@@ -41,10 +41,30 @@ NUMERIC_FEATURES = [
     "rolling_std_168",
 ]
 
-MODEL_FEATURES = (
+WEATHER_FEATURES = [
+    "temperature_c",
+    "apparent_temperature_c",
+    "relative_humidity_pct",
+    "precipitation_mm",
+    "wind_speed_kmh",
+    "weather_code",
+    "is_precipitating",
+]
+
+BASE_MODEL_FEATURES = (
     CATEGORICAL_FEATURES
-    + NUMERIC_FEATURES
+    + BASE_NUMERIC_FEATURES
 )
+
+WEATHER_MODEL_FEATURES = (
+    BASE_MODEL_FEATURES
+    + WEATHER_FEATURES
+)
+
+MODEL_CONFIGURATIONS = {
+    "Gradient boosting": BASE_MODEL_FEATURES,
+    "Gradient boosting + weather": WEATHER_MODEL_FEATURES,
+}
 
 VALIDATION_STARTS = pd.to_datetime(
     [
@@ -57,8 +77,11 @@ VALIDATION_STARTS = pd.to_datetime(
 TEST_DAYS = 7
 
 
-def create_model() -> Pipeline:
+def create_model(
+    model_features: list[str],
+) -> Pipeline:
     """Create a new, unfitted forecasting pipeline."""
+
     preprocessor = ColumnTransformer(
         transformers=[
             (
@@ -90,20 +113,51 @@ def create_model() -> Pipeline:
         ]
     )
 
-def evaluate_models(
+
+def train_ml_models(
+    training_data: pd.DataFrame,
+    evaluation_data: pd.DataFrame,
+) -> dict[str, object]:
+    """Train each ML configuration and return its predictions."""
+
+    predictions = {}
+
+    for model_name, model_features in (
+        MODEL_CONFIGURATIONS.items()
+    ):
+        model = create_model(
+            model_features,
+        )
+
+        model.fit(
+            training_data[model_features],
+            training_data["pickups"],
+        )
+
+        predictions[model_name] = model.predict(
+            evaluation_data[model_features]
+        )
+
+    return predictions
+
+
+def evaluate_predictions(
     data: pd.DataFrame,
-    ml_predictions,
+    ml_predictions: dict[str, object],
 ) -> pd.DataFrame:
     """Compare ML predictions with both seasonal baselines."""
+
     prediction_sources = {
         "Yesterday": data["lag_24"],
         "Last week": data["lag_168"],
-        "Gradient boosting": ml_predictions,
+        **ml_predictions,
     }
 
     records = []
 
-    for model_name, predictions in prediction_sources.items():
+    for model_name, predictions in (
+        prediction_sources.items()
+    ):
         records.append(
             {
                 "model": model_name,
@@ -120,10 +174,12 @@ def evaluate_models(
 
     return pd.DataFrame(records)
 
+
 def run_backtest(
     features: pd.DataFrame,
 ) -> pd.DataFrame:
     """Run expanding-window validation over configured weeks."""
+
     fold_results = []
 
     for validation_start in VALIDATION_STARTS:
@@ -148,18 +204,12 @@ def run_backtest(
             )
         ]
 
-        model = create_model()
-
-        model.fit(
-            training_data[MODEL_FEATURES],
-            training_data["pickups"],
+        ml_predictions = train_ml_models(
+            training_data,
+            validation_data,
         )
 
-        ml_predictions = model.predict(
-            validation_data[MODEL_FEATURES]
-        )
-
-        results = evaluate_models(
+        results = evaluate_predictions(
             validation_data,
             ml_predictions,
         )
@@ -182,10 +232,18 @@ def run_backtest(
         ignore_index=True,
     )
 
-def run_final_test(
+
+def run_diagnostic_test(
     features: pd.DataFrame,
-) -> tuple[pd.DataFrame, Pipeline]:
-    """Train through April 23 and evaluate the frozen final week."""
+) -> pd.DataFrame:
+    """
+    Evaluate the viewed April test week.
+
+    Weather results from this period are diagnostic rather than
+    an unbiased final test because the period influenced feature
+    development.
+    """
+
     test_start = (
         features["timestamp"].max().normalize()
         - pd.Timedelta(days=TEST_DAYS - 1)
@@ -199,38 +257,23 @@ def run_final_test(
         features["timestamp"] >= test_start
     ]
 
-    model = create_model()
-
-    model.fit(
-        training_data[MODEL_FEATURES],
-        training_data["pickups"],
+    ml_predictions = train_ml_models(
+        training_data,
+        test_data,
     )
 
-    ml_predictions = model.predict(
-        test_data[MODEL_FEATURES]
-    )
-
-    results = evaluate_models(
+    return evaluate_predictions(
         test_data,
         ml_predictions,
     )
 
-    return results, model
 
-def main() -> None:
-    """Run rolling validation and final testing."""
-    if not FEATURE_FILE.exists():
-        raise FileNotFoundError(
-            f"Feature data not found: {FEATURE_FILE}\n"
-            "Run src/features/build_features.py first."
-        )
+def summarize_backtest(
+    backtest_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """Calculate average and variation across validation folds."""
 
-    features = pd.read_parquet(FEATURE_FILE)
-
-    print("Running expanding-window backtest...\n")
-    backtest_results = run_backtest(features)
-
-    backtest_summary = (
+    return (
         backtest_results.groupby(
             "model",
             as_index=False,
@@ -244,7 +287,32 @@ def main() -> None:
         .sort_values("mean_MAE")
     )
 
+
+def main() -> None:
+    """Run validation and diagnostic evaluation."""
+
+    if not FEATURE_FILE.exists():
+        raise FileNotFoundError(
+            f"Feature data not found: {FEATURE_FILE}\n"
+            "Run src/features/build_features.py first."
+        )
+
+    features = pd.read_parquet(
+        FEATURE_FILE,
+    )
+
+    print("Running expanding-window backtest...\n")
+
+    backtest_results = run_backtest(
+        features,
+    )
+
+    backtest_summary = summarize_backtest(
+        backtest_results,
+    )
+
     print("\nBacktest summary:")
+
     print(
         backtest_summary.to_string(
             index=False,
@@ -257,14 +325,23 @@ def main() -> None:
         )
     )
 
-    print("\nRunning frozen final test...\n")
-    final_results, _ = run_final_test(features)
-
-    final_results = final_results.sort_values("MAE")
-
-    print("Final test results:")
     print(
-        final_results.to_string(
+        "\nRunning diagnostic evaluation on the viewed "
+        "April 24–30 period...\n"
+    )
+
+    diagnostic_results = (
+        run_diagnostic_test(features)
+        .sort_values("MAE")
+    )
+
+    print(
+        "Diagnostic results "
+        "(not an untouched final test):"
+    )
+
+    print(
+        diagnostic_results.to_string(
             index=False,
             formatters={
                 "MAE": "{:.2f}".format,
