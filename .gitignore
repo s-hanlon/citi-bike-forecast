@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Jupyter-generated files
+.ipynb_checkpoints/
+
+# Secrets and local settings
+.env
+
+# Downloaded and generated data
+data/raw/*
+data/processed/*
+
+# Preserve the empty data directories
+!data/raw/.gitkeep
+!data/processed/.gitkeep
