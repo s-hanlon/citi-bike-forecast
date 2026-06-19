@@ -6,12 +6,7 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-RAW_FILE = (
-    PROJECT_ROOT
-    / "data"
-    / "raw"
-    / "202604-citibike-tripdata.zip"
-)
+RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
 OUTPUT_FILE = (
     PROJECT_ROOT
@@ -26,9 +21,12 @@ COLUMNS = [
     "start_station_name",
 ]
 
+
 def process_csv_part(
     zip_file: ZipFile,
     member_name: str,
+    month_start: pd.Timestamp,
+    month_end: pd.Timestamp,
 ) -> pd.DataFrame:
     """Convert one trip CSV into hourly station pickup counts."""
     print(f"Processing {member_name}")
@@ -49,6 +47,11 @@ def process_csv_part(
         ]
     )
 
+    rides = rides[
+        (rides["started_at"] >= month_start)
+        & (rides["started_at"] < month_end)
+    ].copy()
+
     rides["timestamp"] = rides["started_at"].dt.floor("h")
 
     hourly_pickups = (
@@ -66,25 +69,54 @@ def process_csv_part(
 
     return hourly_pickups
 
+
 def load_hourly_pickups() -> pd.DataFrame:
-    """Load every CSV part and combine duplicate station-hour groups."""
-    if not RAW_FILE.exists():
+    """Load every monthly archive and combine station-hour counts."""
+    raw_files = sorted(
+        RAW_DATA_DIR.glob(
+            "20????-citibike-tripdata.zip"
+        )
+    )
+
+    if not raw_files:
         raise FileNotFoundError(
-            f"Raw data not found: {RAW_FILE}\n"
+            f"No monthly archives found in {RAW_DATA_DIR}\n"
             "Run src/data/download_data.py first."
         )
 
-    with ZipFile(RAW_FILE) as zip_file:
-        csv_members = [
-            name
-            for name in zip_file.namelist()
-            if name.lower().endswith(".csv")
-        ]
+    hourly_parts = []
 
-        hourly_parts = [
-            process_csv_part(zip_file, member_name)
-            for member_name in csv_members
-        ]
+    for raw_file in raw_files:
+        print(f"\nOpening {raw_file.name}")
+
+        archive_month = raw_file.name[:6]
+
+        month_start = pd.to_datetime(
+            archive_month,
+            format="%Y%m",
+        )
+
+        month_end = (
+            month_start
+            + pd.offsets.MonthBegin(1)
+        )
+
+        with ZipFile(raw_file) as zip_file:
+            csv_members = [
+                name
+                for name in zip_file.namelist()
+                if name.lower().endswith(".csv")
+            ]
+
+            for member_name in csv_members:
+                hourly_parts.append(
+                    process_csv_part(
+                        zip_file,
+                        member_name,
+                        month_start,
+                        month_end,
+                    )
+                )
 
     hourly_pickups = pd.concat(
         hourly_parts,
@@ -105,6 +137,7 @@ def load_hourly_pickups() -> pd.DataFrame:
 
     return hourly_pickups
 
+
 def build_dataset(top_n: int = 25) -> None:
     """Build and save a complete hourly dataset for the busiest stations."""
     hourly_pickups = load_hourly_pickups()
@@ -123,7 +156,9 @@ def build_dataset(top_n: int = 25) -> None:
             ascending=[True, False],
         )
         .drop_duplicates("start_station_id")
-        .set_index("start_station_id")["start_station_name"]
+        .set_index("start_station_id")[
+            "start_station_name"
+        ]
     )
 
     station_hourly = (
@@ -138,7 +173,9 @@ def build_dataset(top_n: int = 25) -> None:
     )
 
     top_station_ids = (
-        station_hourly.groupby("start_station_id")["pickups"]
+        station_hourly.groupby(
+            "start_station_id"
+        )["pickups"]
         .sum()
         .nlargest(top_n)
         .index
@@ -146,30 +183,58 @@ def build_dataset(top_n: int = 25) -> None:
     )
 
     station_hourly = station_hourly[
-        station_hourly["start_station_id"].isin(top_station_ids)
-    ].rename(columns={"start_station_id": "station_id"})
+        station_hourly[
+            "start_station_id"
+        ].isin(top_station_ids)
+    ].rename(
+        columns={
+            "start_station_id": "station_id"
+        }
+    )
 
     all_hours = pd.date_range(
-        start=station_hourly["timestamp"].min(),
-        end=station_hourly["timestamp"].max(),
+        start=month_floor(
+            station_hourly["timestamp"].min()
+        ),
+        end=month_ceiling(
+            station_hourly["timestamp"].max()
+        ),
         freq="h",
     )
 
     complete_index = pd.MultiIndex.from_product(
-        [all_hours, top_station_ids],
-        names=["timestamp", "station_id"],
+        [
+            all_hours,
+            top_station_ids,
+        ],
+        names=[
+            "timestamp",
+            "station_id",
+        ],
     )
 
     dataset = (
         station_hourly.set_index(
-            ["timestamp", "station_id"]
+            [
+                "timestamp",
+                "station_id",
+            ]
         )[["pickups"]]
-        .reindex(complete_index, fill_value=0)
+        .reindex(
+            complete_index,
+            fill_value=0,
+        )
         .reset_index()
     )
 
-    dataset["station_name"] = dataset["station_id"].map(
-        station_names
+    dataset["station_name"] = (
+        dataset["station_id"].map(
+            station_names
+        )
+    )
+
+    dataset["pickups"] = (
+        dataset["pickups"].astype("int32")
     )
 
     dataset = dataset[
@@ -181,13 +246,36 @@ def build_dataset(top_n: int = 25) -> None:
         ]
     ]
 
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    dataset.to_parquet(OUTPUT_FILE, index=False)
+    OUTPUT_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    print(f"Saved {len(dataset):,} rows to {OUTPUT_FILE}")
+    dataset.to_parquet(
+        OUTPUT_FILE,
+        index=False,
+    )
+
     print(
-        f"Dataset covers {dataset['timestamp'].min()} "
-        f"through {dataset['timestamp'].max()}"
+        f"\nSaved {len(dataset):,} rows "
+        f"to {OUTPUT_FILE}"
+    )
+    print(
+        f"Dataset covers "
+        f"{dataset['timestamp'].min()} through "
+        f"{dataset['timestamp'].max()}"
+    )
+
+
+def month_floor(timestamp: pd.Timestamp) -> pd.Timestamp:
+    """Return the first hour of a timestamp's month."""
+    return timestamp.to_period("M").start_time
+
+
+def month_ceiling(timestamp: pd.Timestamp) -> pd.Timestamp:
+    """Return the final hour of a timestamp's month."""
+    return (
+        timestamp.to_period("M").end_time.floor("h")
     )
 
 
