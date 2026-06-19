@@ -10,6 +10,7 @@ MONTHS = (
     "202602",
     "202603",
     "202604",
+    "202605",
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

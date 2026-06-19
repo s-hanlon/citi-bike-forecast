@@ -17,7 +17,7 @@ WEATHER_FILE = (
     PROJECT_ROOT
     / "data"
     / "processed"
-    / "hourly_weather.parquet"
+    / "hourly_weather_forecast_day1.parquet"
 )
 
 OUTPUT_FILE = (

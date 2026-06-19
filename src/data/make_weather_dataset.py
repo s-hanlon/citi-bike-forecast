@@ -6,40 +6,79 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-INPUT_FILE = (
+OBSERVED_INPUT_FILE = (
     PROJECT_ROOT
     / "data"
     / "raw"
-    / "nyc_hourly_weather_202601_202604.json"
+    / "nyc_hourly_weather_observed_202601_202605.json"
 )
 
-OUTPUT_FILE = (
+FORECAST_INPUT_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "raw"
+    / "nyc_hourly_weather_forecast_day1_202601_202605.json"
+)
+
+OBSERVED_OUTPUT_FILE = (
     PROJECT_ROOT
     / "data"
     / "processed"
     / "hourly_weather.parquet"
 )
 
-COLUMN_NAMES = {
+FORECAST_OUTPUT_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "hourly_weather_forecast_day1.parquet"
+)
+
+OBSERVED_COLUMN_NAMES = {
     "time": "timestamp",
     "temperature_2m": "temperature_c",
     "apparent_temperature": "apparent_temperature_c",
     "relative_humidity_2m": "relative_humidity_pct",
     "precipitation": "precipitation_mm",
     "wind_speed_10m": "wind_speed_kmh",
+    "weather_code": "weather_code",
 }
 
+FORECAST_COLUMN_NAMES = {
+    "time": "timestamp",
+    "temperature_2m_previous_day1": "temperature_c",
+    "apparent_temperature_previous_day1": (
+        "apparent_temperature_c"
+    ),
+    "relative_humidity_2m_previous_day1": (
+        "relative_humidity_pct"
+    ),
+    "precipitation_previous_day1": "precipitation_mm",
+    "wind_speed_10m_previous_day1": "wind_speed_kmh",
+    "weather_code_previous_day1": "weather_code",
+}
 
-def load_raw_weather() -> tuple[pd.DataFrame, dict]:
-    """Load hourly weather values and their units from raw JSON."""
+EXPECTED_START = pd.Timestamp(
+    "2026-01-01 00:00:00"
+)
 
-    if not INPUT_FILE.exists():
+EXPECTED_END = pd.Timestamp(
+    "2026-05-31 23:00:00"
+)
+
+
+def load_raw_weather(
+    input_file: Path,
+) -> tuple[pd.DataFrame, dict]:
+    """Load hourly values and units from a raw weather response."""
+
+    if not input_file.exists():
         raise FileNotFoundError(
-            f"Weather file not found: {INPUT_FILE}\n"
+            f"Weather file not found: {input_file}\n"
             "Run src/data/download_weather.py first."
         )
 
-    with INPUT_FILE.open(
+    with input_file.open(
         "r",
         encoding="utf-8",
     ) as file:
@@ -47,33 +86,48 @@ def load_raw_weather() -> tuple[pd.DataFrame, dict]:
 
     if "hourly" not in data:
         raise ValueError(
-            "Raw weather data does not contain an 'hourly' section."
+            f"{input_file.name} does not contain hourly data."
         )
 
-    weather = pd.DataFrame(data["hourly"])
-    units = data.get("hourly_units", {})
+    weather = pd.DataFrame(
+        data["hourly"]
+    )
+
+    units = data.get(
+        "hourly_units",
+        {},
+    )
 
     return weather, units
 
 
-def clean_weather(weather: pd.DataFrame) -> pd.DataFrame:
-    """Validate and clean the hourly weather table."""
+def clean_weather(
+    weather: pd.DataFrame,
+    column_names: dict[str, str],
+) -> pd.DataFrame:
+    """Select, rename, and validate weather columns."""
 
-    required_columns = set(COLUMN_NAMES) | {"weather_code"}
+    required_columns = set(
+        column_names
+    )
 
-    missing_columns = required_columns - set(weather.columns)
+    missing_columns = (
+        required_columns
+        - set(weather.columns)
+    )
 
     if missing_columns:
         raise ValueError(
-            f"Missing weather columns: {sorted(missing_columns)}"
+            f"Missing weather columns: "
+            f"{sorted(missing_columns)}"
         )
 
     weather = weather[
-        list(COLUMN_NAMES) + ["weather_code"]
+        list(column_names)
     ].copy()
 
     weather = weather.rename(
-        columns=COLUMN_NAMES,
+        columns=column_names,
     )
 
     weather["timestamp"] = pd.to_datetime(
@@ -81,9 +135,10 @@ def clean_weather(weather: pd.DataFrame) -> pd.DataFrame:
         errors="raise",
     )
 
-    weather = weather.sort_values(
-        "timestamp",
-    ).reset_index(drop=True)
+    weather = (
+        weather.sort_values("timestamp")
+        .reset_index(drop=True)
+    )
 
     if weather["timestamp"].duplicated().any():
         raise ValueError(
@@ -101,85 +156,125 @@ def clean_weather(weather: pd.DataFrame) -> pd.DataFrame:
     return weather
 
 
-def validate_weather(weather: pd.DataFrame) -> None:
-    """Confirm that every expected hourly timestamp is present."""
+def validate_weather(
+    weather: pd.DataFrame,
+) -> None:
+    """Confirm that every expected timestamp is present."""
 
     expected_timestamps = pd.date_range(
-        start="2026-01-01 00:00:00",
-        end="2026-04-30 23:00:00",
+        start=EXPECTED_START,
+        end=EXPECTED_END,
         freq="h",
     )
 
     actual_timestamps = pd.DatetimeIndex(
-        weather["timestamp"],
+        weather["timestamp"]
     )
 
-    missing_timestamps = expected_timestamps.difference(
-        actual_timestamps,
+    missing_timestamps = (
+        expected_timestamps.difference(
+            actual_timestamps
+        )
     )
 
-    unexpected_timestamps = actual_timestamps.difference(
-        expected_timestamps,
+    unexpected_timestamps = (
+        actual_timestamps.difference(
+            expected_timestamps
+        )
     )
 
     if len(missing_timestamps) > 0:
         raise ValueError(
-            f"Missing {len(missing_timestamps)} expected timestamps."
+            f"Missing {len(missing_timestamps)} "
+            "expected timestamps."
         )
 
     if len(unexpected_timestamps) > 0:
         raise ValueError(
-            f"Found {len(unexpected_timestamps)} unexpected timestamps."
+            f"Found {len(unexpected_timestamps)} "
+            "unexpected timestamps."
         )
 
     if len(weather) != len(expected_timestamps):
         raise ValueError(
-            "Weather row count does not match the expected hourly range."
+            "Weather row count does not match "
+            "the expected hourly range."
         )
 
 
 def save_weather(
     weather: pd.DataFrame,
-    units: dict,
+    output_file: Path,
+    label: str,
 ) -> None:
-    """Save the cleaned weather dataset."""
+    """Save one cleaned weather dataset."""
 
-    OUTPUT_FILE.parent.mkdir(
+    output_file.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
     weather.to_parquet(
-        OUTPUT_FILE,
+        output_file,
         index=False,
     )
 
-    print(f"Saved {len(weather):,} weather rows to:")
-    print(OUTPUT_FILE)
     print(
-        f"Weather range: "
-        f"{weather['timestamp'].min()} through "
+        f"Saved {len(weather):,} {label} rows to:"
+    )
+    print(output_file)
+    print(
+        f"Range: {weather['timestamp'].min()} through "
         f"{weather['timestamp'].max()}"
     )
-    print(f"Missing values: {weather.isna().sum().sum()}")
+    print(
+        f"Missing values: "
+        f"{weather.isna().sum().sum()}\n"
+    )
 
-    print("\nSource units:")
 
-    for source_column, output_column in COLUMN_NAMES.items():
-        if source_column == "time":
-            continue
+def process_weather_source(
+    input_file: Path,
+    output_file: Path,
+    column_names: dict[str, str],
+    label: str,
+) -> None:
+    """Run the complete cleaning pipeline for one source."""
 
-        print(
-            f"  {output_column}: "
-            f"{units.get(source_column, 'unknown')}"
-        )
+    raw_weather, _ = load_raw_weather(
+        input_file
+    )
+
+    weather = clean_weather(
+        raw_weather,
+        column_names,
+    )
+
+    validate_weather(
+        weather
+    )
+
+    save_weather(
+        weather,
+        output_file,
+        label,
+    )
 
 
 def main() -> None:
-    weather, units = load_raw_weather()
-    weather = clean_weather(weather)
-    validate_weather(weather)
-    save_weather(weather, units)
+    process_weather_source(
+        OBSERVED_INPUT_FILE,
+        OBSERVED_OUTPUT_FILE,
+        OBSERVED_COLUMN_NAMES,
+        "observed-weather",
+    )
+
+    process_weather_source(
+        FORECAST_INPUT_FILE,
+        FORECAST_OUTPUT_FILE,
+        FORECAST_COLUMN_NAMES,
+        "day-ahead forecast",
+    )
 
 
 if __name__ == "__main__":

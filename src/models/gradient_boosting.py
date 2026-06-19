@@ -56,14 +56,16 @@ BASE_MODEL_FEATURES = (
     + BASE_NUMERIC_FEATURES
 )
 
-WEATHER_MODEL_FEATURES = (
+FORECAST_MODEL_FEATURES = (
     BASE_MODEL_FEATURES
     + WEATHER_FEATURES
 )
 
 MODEL_CONFIGURATIONS = {
     "Gradient boosting": BASE_MODEL_FEATURES,
-    "Gradient boosting + weather": WEATHER_MODEL_FEATURES,
+    "Gradient boosting + 24h forecast": (
+        FORECAST_MODEL_FEATURES
+    ),
 }
 
 VALIDATION_STARTS = pd.to_datetime(
@@ -74,12 +76,22 @@ VALIDATION_STARTS = pd.to_datetime(
     ]
 )
 
-TEST_DAYS = 7
+FINAL_TEST_START = pd.Timestamp(
+    "2026-05-25"
+)
+
+FINAL_TEST_END = pd.Timestamp(
+    "2026-06-01"
+)
+
+EXPECTED_TEST_ROWS = (
+    7
+    * 24
+    * 25
+)
 
 
-def create_model(
-    model_features: list[str],
-) -> Pipeline:
+def create_model() -> Pipeline:
     """Create a new, unfitted forecasting pipeline."""
 
     preprocessor = ColumnTransformer(
@@ -118,16 +130,14 @@ def train_ml_models(
     training_data: pd.DataFrame,
     evaluation_data: pd.DataFrame,
 ) -> dict[str, object]:
-    """Train each ML configuration and return its predictions."""
+    """Train each ML configuration and return predictions."""
 
     predictions = {}
 
     for model_name, model_features in (
         MODEL_CONFIGURATIONS.items()
     ):
-        model = create_model(
-            model_features,
-        )
+        model = create_model()
 
         model.fit(
             training_data[model_features],
@@ -145,7 +155,7 @@ def evaluate_predictions(
     data: pd.DataFrame,
     ml_predictions: dict[str, object],
 ) -> pd.DataFrame:
-    """Compare ML predictions with both seasonal baselines."""
+    """Compare ML predictions with seasonal baselines."""
 
     prediction_sources = {
         "Yesterday": data["lag_24"],
@@ -233,29 +243,32 @@ def run_backtest(
     )
 
 
-def run_diagnostic_test(
+def run_final_test(
     features: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Evaluate the viewed April test week.
-
-    Weather results from this period are diagnostic rather than
-    an unbiased final test because the period influenced feature
-    development.
-    """
-
-    test_start = (
-        features["timestamp"].max().normalize()
-        - pd.Timedelta(days=TEST_DAYS - 1)
-    )
+    """Evaluate the locked May 25–31 holdout exactly once."""
 
     training_data = features[
-        features["timestamp"] < test_start
+        features["timestamp"]
+        < FINAL_TEST_START
     ]
 
     test_data = features[
-        features["timestamp"] >= test_start
+        (
+            features["timestamp"]
+            >= FINAL_TEST_START
+        )
+        & (
+            features["timestamp"]
+            < FINAL_TEST_END
+        )
     ]
+
+    if len(test_data) != EXPECTED_TEST_ROWS:
+        raise ValueError(
+            f"Expected {EXPECTED_TEST_ROWS:,} final test rows, "
+            f"but found {len(test_data):,}."
+        )
 
     ml_predictions = train_ml_models(
         training_data,
@@ -289,7 +302,7 @@ def summarize_backtest(
 
 
 def main() -> None:
-    """Run validation and diagnostic evaluation."""
+    """Run validation followed by the locked final test."""
 
     if not FEATURE_FILE.exists():
         raise FileNotFoundError(
@@ -304,11 +317,11 @@ def main() -> None:
     print("Running expanding-window backtest...\n")
 
     backtest_results = run_backtest(
-        features,
+        features
     )
 
     backtest_summary = summarize_backtest(
-        backtest_results,
+        backtest_results
     )
 
     print("\nBacktest summary:")
@@ -326,22 +339,19 @@ def main() -> None:
     )
 
     print(
-        "\nRunning diagnostic evaluation on the viewed "
-        "April 24–30 period...\n"
+        "\nRunning locked final test "
+        "(May 25–31)...\n"
     )
 
-    diagnostic_results = (
-        run_diagnostic_test(features)
+    final_results = (
+        run_final_test(features)
         .sort_values("MAE")
     )
 
-    print(
-        "Diagnostic results "
-        "(not an untouched final test):"
-    )
+    print("Final untouched test results:")
 
     print(
-        diagnostic_results.to_string(
+        final_results.to_string(
             index=False,
             formatters={
                 "MAE": "{:.2f}".format,

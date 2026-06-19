@@ -21,6 +21,10 @@ COLUMNS = [
     "start_station_name",
 ]
 
+STATION_SELECTION_END = pd.Timestamp(
+    "2026-05-01"
+)
+
 
 def process_csv_part(
     zip_file: ZipFile,
@@ -29,6 +33,7 @@ def process_csv_part(
     month_end: pd.Timestamp,
 ) -> pd.DataFrame:
     """Convert one trip CSV into hourly station pickup counts."""
+
     print(f"Processing {member_name}")
 
     with zip_file.open(member_name) as csv_file:
@@ -52,7 +57,9 @@ def process_csv_part(
         & (rides["started_at"] < month_end)
     ].copy()
 
-    rides["timestamp"] = rides["started_at"].dt.floor("h")
+    rides["timestamp"] = (
+        rides["started_at"].dt.floor("h")
+    )
 
     hourly_pickups = (
         rides.groupby(
@@ -72,6 +79,7 @@ def process_csv_part(
 
 def load_hourly_pickups() -> pd.DataFrame:
     """Load every monthly archive and combine station-hour counts."""
+
     raw_files = sorted(
         RAW_DATA_DIR.glob(
             "20????-citibike-tripdata.zip"
@@ -138,8 +146,45 @@ def load_hourly_pickups() -> pd.DataFrame:
     return hourly_pickups
 
 
+def select_top_station_ids(
+    station_hourly: pd.DataFrame,
+    top_n: int,
+) -> list[str]:
+    """Select stations using development-period demand only."""
+
+    selection_data = station_hourly[
+        station_hourly["timestamp"]
+        < STATION_SELECTION_END
+    ]
+
+    if selection_data.empty:
+        raise ValueError(
+            "No station data exists before the station-selection cutoff."
+        )
+
+    station_totals = (
+        selection_data.groupby(
+            "start_station_id"
+        )["pickups"]
+        .sum()
+    )
+
+    if len(station_totals) < top_n:
+        raise ValueError(
+            f"Only {len(station_totals)} stations are available, "
+            f"but top_n={top_n}."
+        )
+
+    return (
+        station_totals.nlargest(top_n)
+        .index
+        .tolist()
+    )
+
+
 def build_dataset(top_n: int = 25) -> None:
-    """Build and save a complete hourly dataset for the busiest stations."""
+    """Build a complete hourly dataset for fixed high-demand stations."""
+
     hourly_pickups = load_hourly_pickups()
 
     station_names = (
@@ -172,14 +217,9 @@ def build_dataset(top_n: int = 25) -> None:
         .sum()
     )
 
-    top_station_ids = (
-        station_hourly.groupby(
-            "start_station_id"
-        )["pickups"]
-        .sum()
-        .nlargest(top_n)
-        .index
-        .tolist()
+    top_station_ids = select_top_station_ids(
+        station_hourly,
+        top_n,
     )
 
     station_hourly = station_hourly[
@@ -257,7 +297,11 @@ def build_dataset(top_n: int = 25) -> None:
     )
 
     print(
-        f"\nSaved {len(dataset):,} rows "
+        f"\nStations selected using data before "
+        f"{STATION_SELECTION_END.date()}"
+    )
+    print(
+        f"Saved {len(dataset):,} rows "
         f"to {OUTPUT_FILE}"
     )
     print(
@@ -267,15 +311,23 @@ def build_dataset(top_n: int = 25) -> None:
     )
 
 
-def month_floor(timestamp: pd.Timestamp) -> pd.Timestamp:
+def month_floor(
+    timestamp: pd.Timestamp,
+) -> pd.Timestamp:
     """Return the first hour of a timestamp's month."""
+
     return timestamp.to_period("M").start_time
 
 
-def month_ceiling(timestamp: pd.Timestamp) -> pd.Timestamp:
+def month_ceiling(
+    timestamp: pd.Timestamp,
+) -> pd.Timestamp:
     """Return the final hour of a timestamp's month."""
+
     return (
-        timestamp.to_period("M").end_time.floor("h")
+        timestamp.to_period("M")
+        .end_time
+        .floor("h")
     )
 
 
