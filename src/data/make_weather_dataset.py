@@ -10,14 +10,14 @@ OBSERVED_INPUT_FILE = (
     PROJECT_ROOT
     / "data"
     / "raw"
-    / "nyc_hourly_weather_observed_202601_202605.json"
+    / "nyc_hourly_weather_observed_202501_202605.json"
 )
 
 FORECAST_INPUT_FILE = (
     PROJECT_ROOT
     / "data"
     / "raw"
-    / "nyc_hourly_weather_forecast_day1_202601_202605.json"
+    / "nyc_hourly_weather_forecast_day1_202501_202605.json"
 )
 
 OBSERVED_OUTPUT_FILE = (
@@ -59,7 +59,7 @@ FORECAST_COLUMN_NAMES = {
 }
 
 EXPECTED_START = pd.Timestamp(
-    "2026-01-01 00:00:00"
+    "2025-01-01 00:00:00"
 )
 
 EXPECTED_END = pd.Timestamp(

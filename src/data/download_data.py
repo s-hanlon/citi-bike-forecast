@@ -5,13 +5,36 @@ import requests
 
 BASE_URL = "https://s3.amazonaws.com/tripdata"
 
-MONTHS = (
-    "202601",
-    "202602",
-    "202603",
-    "202604",
-    "202605",
-)
+START_MONTH = "202501"
+END_MONTH = "202605"
+
+
+def generate_months(start_month: str, end_month: str) -> tuple[str, ...]:
+    """Generate YYYYMM strings from start_month through end_month, inclusive."""
+    start_year = int(start_month[:4])
+    start_month_number = int(start_month[4:])
+
+    end_year = int(end_month[:4])
+    end_month_number = int(end_month[4:])
+
+    months = []
+
+    year = start_year
+    month = start_month_number
+
+    while (year, month) <= (end_year, end_month_number):
+        months.append(f"{year}{month:02d}")
+
+        month += 1
+
+        if month == 13:
+            month = 1
+            year += 1
+
+    return tuple(months)
+
+
+MONTHS = generate_months(START_MONTH, END_MONTH)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
