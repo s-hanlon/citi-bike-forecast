@@ -9,8 +9,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
+import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from src.live.gbfs import fetch_live_station_availability
 
 MODEL_FILE = PROJECT_ROOT / "models" / "citi_bike_demand_model.joblib"
 METADATA_FILE = (
@@ -129,6 +134,10 @@ def add_predictions(
 
     return predictions
 
+@st.cache_data(ttl=60)
+def load_live_availability() -> pd.DataFrame:
+    """Load live Citi Bike station availability from GBFS."""
+    return fetch_live_station_availability()
 
 def apply_custom_css() -> None:
     """Apply custom dashboard styling."""
@@ -332,41 +341,349 @@ def apply_custom_css() -> None:
         unsafe_allow_html=True,
     )
 
+def apply_product_polish_css() -> None:
+    """Apply additional product-style dashboard polish."""
+    st.markdown(
+        """
+<style>
+.product-shell {
+    display: grid;
+    grid-template-columns: 1.25fr 0.75fr;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.product-panel {
+    background: linear-gradient(180deg, rgba(15, 32, 54, 0.96), rgba(8, 18, 32, 0.96));
+    border: 1px solid rgba(125, 211, 252, 0.18);
+    border-radius: 1.25rem;
+    padding: 1.2rem;
+    box-shadow: 0 18px 55px rgba(0, 0, 0, 0.25);
+}
+
+.product-kicker {
+    color: #22D3EE;
+    font-size: 0.74rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 900;
+    margin-bottom: 0.45rem;
+}
+
+.product-title {
+    color: #F8FAFC;
+    font-size: 2.85rem;
+    line-height: 0.98;
+    letter-spacing: -0.06em;
+    font-weight: 950;
+    margin-bottom: 0.75rem;
+}
+
+.product-copy {
+    color: #CBD5E1;
+    font-size: 1rem;
+    line-height: 1.65;
+    max-width: 760px;
+}
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.85rem;
+    margin-top: 1.15rem;
+}
+
+.product-metric {
+    background: rgba(2, 8, 23, 0.52);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 1rem;
+    padding: 1rem;
+}
+
+.product-metric-label {
+    color: #94A3B8;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 850;
+}
+
+.product-metric-value {
+    color: #F8FAFC;
+    font-size: 1.75rem;
+    line-height: 1.1;
+    font-weight: 950;
+    margin-top: 0.35rem;
+}
+
+.product-metric-caption {
+    color: #94A3B8;
+    font-size: 0.78rem;
+    margin-top: 0.25rem;
+}
+
+.signal-card {
+    background: rgba(2, 8, 23, 0.42);
+    border: 1px solid rgba(34, 211, 238, 0.16);
+    border-radius: 1rem;
+    padding: 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.signal-label {
+    color: #94A3B8;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 850;
+}
+
+.signal-value {
+    color: #A5F3FC;
+    font-size: 1.15rem;
+    font-weight: 900;
+    margin-top: 0.25rem;
+}
+
+.signal-copy {
+    color: #CBD5E1;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    margin-top: 0.35rem;
+}
+
+.executive-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.9rem;
+    margin-top: 0.9rem;
+}
+
+.executive-card {
+    background: linear-gradient(180deg, rgba(16, 36, 58, 0.92), rgba(8, 18, 32, 0.92));
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 1.05rem;
+    padding: 1rem;
+}
+
+.executive-card-title {
+    color: #F8FAFC;
+    font-weight: 900;
+    font-size: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+.executive-card-copy {
+    color: #CBD5E1;
+    line-height: 1.5;
+    font-size: 0.9rem;
+}
+
+.section-label {
+    color: #F8FAFC;
+    font-size: 1.3rem;
+    font-weight: 950;
+    letter-spacing: -0.035em;
+    margin-top: 1.2rem;
+    margin-bottom: 0.25rem;
+}
+
+.section-subcopy {
+    color: #94A3B8;
+    font-size: 0.95rem;
+    margin-bottom: 0.85rem;
+}
+
+@media (max-width: 1050px) {
+    .product-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .metric-grid,
+    .executive-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 650px) {
+    .metric-grid,
+    .executive-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .product-title {
+        font-size: 2.25rem;
+    }
+}
+
+.availability-panel {
+    background: linear-gradient(180deg, rgba(10, 24, 41, 0.96), rgba(3, 10, 22, 0.96));
+    border: 1px solid rgba(34, 211, 238, 0.18);
+    border-radius: 1.15rem;
+    padding: 1.05rem;
+    margin: 1rem 0 1.1rem 0;
+}
+
+.availability-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 0.9rem;
+}
+
+.availability-title {
+    color: #F8FAFC;
+    font-size: 1.05rem;
+    font-weight: 950;
+}
+
+.availability-subtitle {
+    color: #94A3B8;
+    font-size: 0.82rem;
+    margin-top: 0.18rem;
+}
+
+.status-pill {
+    display: inline-block;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.status-good {
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    color: #86EFAC;
+}
+
+.status-warning {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: #FCD34D;
+}
+
+.status-danger {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #FCA5A5;
+}
+
+.status-neutral {
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: #CBD5E1;
+}
+
+.availability-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.availability-card {
+    background: rgba(2, 8, 23, 0.48);
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 0.95rem;
+    padding: 0.85rem;
+}
+
+.availability-label {
+    color: #94A3B8;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 850;
+}
+
+.availability-value {
+    color: #F8FAFC;
+    font-size: 1.45rem;
+    font-weight: 950;
+    margin-top: 0.25rem;
+}
+
+.availability-note {
+    color: #94A3B8;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    margin-top: 0.85rem;
+}
+
+@media (max-width: 950px) {
+    .availability-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .availability-header {
+        flex-direction: column;
+    }
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def render_hero(metadata: dict) -> None:
-    """Render page hero."""
+    """Render product-style hero."""
     hero_html = (
-        '<div class="hero-card">'
-        '<div class="hero-eyebrow">Urban mobility forecasting dashboard</div>'
-        '<div class="hero-title">Citi Bike Demand Intelligence</div>'
-        '<div class="hero-subtitle">'
-        "Station-level hourly pickup forecasts powered by long-history trip data, "
-        "holiday-aware features, and archived 24-hour-ahead weather forecasts."
+        '<div class="product-shell">'
+        '<div class="product-panel">'
+        '<div class="product-kicker">NYC mobility forecasting system</div>'
+        '<div class="product-title">CitiFlow Intelligence</div>'
+        '<div class="product-copy">'
+        "Station-level Citi Bike demand forecasting built with long-history trip data, "
+        "holiday-aware calendar features, and archived 24-hour-ahead weather forecasts. "
+        "Designed to estimate pickup demand patterns across the urban bike-share network."
         "</div>"
-        '<div class="hero-grid">'
-        '<div class="hero-stat">'
-        '<div class="hero-stat-label">Stations</div>'
-        f'<div class="hero-stat-value">{metadata["station_count"]}</div>'
+        '<div class="metric-grid">'
+        '<div class="product-metric">'
+        '<div class="product-metric-label">Stations</div>'
+        f'<div class="product-metric-value">{metadata["station_count"]}</div>'
+        '<div class="product-metric-caption">high-demand locations</div>'
         "</div>"
-        '<div class="hero-stat">'
-        '<div class="hero-stat-label">Training rows</div>'
-        f'<div class="hero-stat-value">{metadata["training_rows"]:,}</div>'
+        '<div class="product-metric">'
+        '<div class="product-metric-label">Training rows</div>'
+        f'<div class="product-metric-value">{metadata["training_rows"]:,}</div>'
+        '<div class="product-metric-caption">station-hour examples</div>'
         "</div>"
-        '<div class="hero-stat">'
-        '<div class="hero-stat-label">Backtest MAE</div>'
-        '<div class="hero-stat-value">4.29</div>'
+        '<div class="product-metric">'
+        '<div class="product-metric-label">Backtest MAE</div>'
+        '<div class="product-metric-value">4.29</div>'
+        '<div class="product-metric-caption">seasonal validation</div>'
         "</div>"
-        '<div class="hero-stat">'
-        '<div class="hero-stat-label">Benchmark MAE</div>'
-        '<div class="hero-stat-value">4.28</div>'
+        '<div class="product-metric">'
+        '<div class="product-metric-label">Weather lift</div>'
+        '<div class="product-metric-value">10.3%</div>'
+        '<div class="product-metric-caption">vs non-weather ML</div>'
+        "</div>"
+        "</div>"
+        "</div>"
+        '<div class="product-panel">'
+        '<div class="signal-card">'
+        '<div class="signal-label">Best model</div>'
+        '<div class="signal-value">Gradient boosting + weather + holidays</div>'
+        '<div class="signal-copy">Global station model trained on lagged demand, rolling demand, calendar effects, and day-ahead weather forecasts.</div>'
+        "</div>"
+        '<div class="signal-card">'
+        '<div class="signal-label">Evaluation</div>'
+        '<div class="signal-value">12 seasonal validation weeks</div>'
+        '<div class="signal-copy">Backtests span summer, fall, winter, and spring instead of relying on one narrow time window.</div>'
+        "</div>"
+        '<div class="signal-card">'
+        '<div class="signal-label">Operational caveat</div>'
+        '<div class="signal-value">Historical explorer</div>'
+        '<div class="signal-copy">The current app explores historical forecast rows. A future version can connect live station status and real-time weather forecasts.</div>'
         "</div>"
         "</div>"
         "</div>"
     )
 
-    st.markdown(
-        hero_html,
-        unsafe_allow_html=True,
-    )
+    st.markdown(hero_html, unsafe_allow_html=True)
 
 def build_sidebar_controls(
     features: pd.DataFrame,
@@ -442,39 +759,162 @@ def render_overview_tab(
     predictions: pd.DataFrame,
     metadata: dict,
 ) -> None:
-    """Render project overview."""
-    st.subheader("Project Overview")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Stations", f"{metadata['station_count']}")
-    col2.metric("Training rows", f"{metadata['training_rows']:,}")
-    col3.metric("Best backtest MAE", "4.29")
-    col4.metric("May benchmark MAE", "4.28")
+    """Render product-style project overview."""
+    st.markdown(
+        '<div class="section-label">Executive Overview</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        (
+            '<div class="section-subcopy">'
+            "A compact summary of the forecasting system, evaluation design, "
+            "and current model performance."
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
         """
-        <span class="badge">Long-history data</span>
-        <span class="badge">Holiday features</span>
-        <span class="badge">Day-ahead weather forecasts</span>
-        <span class="badge">Station-level predictions</span>
+<div class="executive-grid">
+    <div class="executive-card">
+        <div class="executive-card-title">Forecasting task</div>
+        <div class="executive-card-copy">
+            Predict hourly pickup demand for high-volume Citi Bike stations using historical demand, holidays, and weather forecasts.
+        </div>
+    </div>
+    <div class="executive-card">
+        <div class="executive-card-title">Why it matters</div>
+        <div class="executive-card-copy">
+            Accurate demand forecasts can support rebalancing, staffing, station monitoring, and shortage-risk analysis.
+        </div>
+    </div>
+    <div class="executive-card">
+        <div class="executive-card-title">Current limitation</div>
+        <div class="executive-card-copy">
+            The app currently explores historical forecast rows. Live deployment would require real-time station and weather feeds.
+        </div>
+    </div>
+</div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.write(
-        "The v2 model predicts hourly pickup demand for 25 high-traffic "
-        "Citi Bike stations. It uses lagged demand, rolling demand, station "
-        "identity, calendar features, federal holiday indicators, and archived "
-        "24-hour-ahead weather forecasts."
+    st.markdown(
+        '<div class="section-label">Model Snapshot</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        (
+            '<div class="section-subcopy">'
+            "The strongest model combines demand history, station identity, "
+            "holiday signals, and archived day-ahead weather forecasts."
+            "</div>"
+        ),
+        unsafe_allow_html=True,
     )
 
-    st.divider()
-
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([0.95, 1.05])
 
     with col1:
-        st.subheader("Seasonal Backtest Summary")
+        fig = px.bar(
+            MODEL_SUMMARY.sort_values("mean_mae", ascending=True),
+            x="mean_mae",
+            y="model",
+            orientation="h",
+            title="Seasonal Backtest MAE by Model",
+            labels={
+                "mean_mae": "Mean MAE",
+                "model": "",
+            },
+            text="mean_mae",
+        )
+
+        fig.update_traces(
+            texttemplate="%{text:.2f}",
+            textposition="outside",
+            cliponaxis=False,
+        )
+
+        fig.update_layout(
+            height=390,
+            margin=dict(l=10, r=35, t=55, b=10),
+            xaxis_title="Mean absolute error",
+            yaxis_title="",
+            showlegend=False,
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        fig = px.bar(
+            BACKTEST_RESULTS,
+            x="validation_week",
+            y="weather_improvement_pct",
+            title="Weather Forecast Lift by Validation Week",
+            labels={
+                "validation_week": "Validation week",
+                "weather_improvement_pct": "MAE improvement vs no-weather model (%)",
+            },
+        )
+
+        fig.add_hline(
+            y=0,
+            line_dash="dash",
+        )
+
+        fig.update_layout(
+            height=390,
+            margin=dict(l=10, r=10, t=55, b=10),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        '<div class="section-label">System Coverage</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        (
+            '<div class="section-subcopy">'
+            "The current dashboard loads the trained v2 model and evaluates "
+            "historical station-hour forecast rows from the processed feature table."
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    coverage_html = (
+        '<div class="executive-grid">'
+        '<div class="executive-card">'
+        '<div class="executive-card-title">Training window</div>'
+        f'<div class="executive-card-copy">{metadata["training_start"]} through {metadata["training_end"]}</div>'
+        "</div>"
+        '<div class="executive-card">'
+        '<div class="executive-card-title">Feature table</div>'
+        f'<div class="executive-card-copy">{metadata["training_rows"]:,} station-hour rows across {metadata["station_count"]} selected stations.</div>'
+        "</div>"
+        '<div class="executive-card">'
+        '<div class="executive-card-title">Loaded predictions</div>'
+        f'<div class="executive-card-copy">{len(predictions):,} rows scored in the dashboard from the saved model artifact.</div>'
+        "</div>"
+        "</div>"
+    )
+
+    st.markdown(
+        coverage_html,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="section-label">Current Results</div>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write("**Seasonal validation summary**")
         st.dataframe(
             MODEL_SUMMARY,
             use_container_width=True,
@@ -482,42 +922,201 @@ def render_overview_tab(
         )
 
     with col2:
-        fig = px.bar(
-            MODEL_SUMMARY.sort_values("mean_mae", ascending=True),
-            x="mean_mae",
-            y="model",
-            orientation="h",
-            title="Mean MAE by Model",
-            labels={
-                "mean_mae": "Mean MAE",
-                "model": "Model",
-            },
+        st.write("**May 2026 benchmark**")
+        st.dataframe(
+            MAY_BENCHMARK,
+            use_container_width=True,
+            hide_index=True,
         )
-        fig.update_layout(height=360, margin=dict(l=10, r=10, t=50, b=10))
-        st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Dataset Coverage")
+def format_percent(value) -> str:
+    """Format a decimal ratio as a percentage string."""
+    if pd.isna(value):
+        return "N/A"
 
-    coverage = pd.DataFrame(
-        [
-            ["Feature table start", metadata["training_start"]],
-            ["Feature table end", metadata["training_end"]],
-            ["Feature rows", f"{metadata['training_rows']:,}"],
-            ["Stations", metadata["station_count"]],
-            ["Prediction rows loaded", f"{len(predictions):,}"],
-        ],
-        columns=["item", "value"],
+    return f"{value * 100:.0f}%"
+
+def normalize_station_name(value) -> str:
+    """Normalize station names for matching historical data to live GBFS data."""
+    if pd.isna(value):
+        return ""
+
+    return (
+        str(value)
+        .lower()
+        .strip()
+        .replace("&", "and")
+        .replace(".", "")
+        .replace("  ", " ")
     )
 
-    st.dataframe(
-        coverage,
-        use_container_width=True,
-        hide_index=True,
+def format_live_timestamp(value) -> str:
+    """Format a live GBFS timestamp for display."""
+    if pd.isna(value):
+        return "Unknown"
+
+    timestamp = pd.to_datetime(value)
+
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize("UTC")
+
+    return timestamp.tz_convert("America/New_York").strftime(
+        "%b %d, %Y %I:%M %p ET"
     )
 
+
+def format_availability_status(status: str) -> str:
+    """Format an availability status label."""
+    return str(status).replace("_", " ").title()
+
+
+def availability_status_class(status: str) -> str:
+    """Map availability status to a CSS class."""
+    status = str(status)
+
+    if status in {"healthy"}:
+        return "status-good"
+
+    if status in {"nearly_empty", "nearly_full", "low_bikes", "low_docks"}:
+        return "status-warning"
+
+    if status in {"empty", "full", "station_offline", "station_not_installed"}:
+        return "status-danger"
+
+    return "status-neutral"
+
+def render_live_availability_panel(
+    live_availability: pd.DataFrame,
+    selected_station_id: str,
+    selected_station_name: str,
+) -> None:
+    """Render live availability for the selected station."""
+    st.markdown(
+        '<div class="section-label">Live Station Availability</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        (
+            '<div class="section-subcopy">'
+            "Real-time Citi Bike inventory from the GBFS station status feed. "
+            "This is current station context, not yet an input to the trained "
+            "historical demand model."
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if live_availability.empty:
+        st.info("Live availability data is not available right now.")
+        return
+
+    live_data = live_availability.copy()
+    live_data["station_id"] = live_data["station_id"].astype(str)
+    live_data["station_name_normalized"] = live_data["station_name"].apply(
+        normalize_station_name
+    )
+
+    selected_station_id = str(selected_station_id)
+    selected_station_name_normalized = normalize_station_name(
+        selected_station_name
+    )
+
+    selected_live = live_data[
+        live_data["station_id"] == selected_station_id
+    ]
+
+    if selected_live.empty:
+        selected_live = live_data[
+            live_data["station_name_normalized"]
+            == selected_station_name_normalized
+        ]
+
+    if selected_live.empty:
+        st.info(
+            "This selected station was not found in the live GBFS availability feed."
+        )
+
+        with st.expander("Debug matching details"):
+            st.write("Historical station ID:", selected_station_id)
+            st.write("Historical station name:", selected_station_name)
+            st.write(
+                "Live stations with similar names:",
+                live_data[
+                    live_data["station_name"]
+                    .str.lower()
+                    .str.contains(
+                        str(selected_station_name).lower().split(" ")[0],
+                        na=False,
+                    )
+                ][["station_id", "station_name"]].head(20),
+            )
+
+        return
+
+    row = selected_live.iloc[0]
+
+    status = row["availability_status"]
+    status_label = format_availability_status(status)
+    status_class = availability_status_class(status)
+
+    station_name = row["station_name"]
+    capacity = row["capacity"]
+    bikes = row["num_bikes_available"]
+    ebikes = row["num_ebikes_available"]
+    docks = row["num_docks_available"]
+    pct_bikes = format_percent(row["pct_bikes_available"])
+    pct_docks = format_percent(row["pct_docks_available"])
+    last_reported = format_live_timestamp(row["last_reported_utc"])
+
+    panel_html = (
+        '<div class="availability-panel">'
+        '<div class="availability-header">'
+        "<div>"
+        '<div class="availability-title">'
+        f"{station_name}"
+        "</div>"
+        '<div class="availability-subtitle">'
+        f"Last reported: {last_reported}"
+        "</div>"
+        "</div>"
+        f'<div class="status-pill {status_class}">{status_label}</div>'
+        "</div>"
+        '<div class="availability-grid">'
+        '<div class="availability-card">'
+        '<div class="availability-label">Bikes</div>'
+        f'<div class="availability-value">{bikes:.0f}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">E-bikes</div>'
+        f'<div class="availability-value">{ebikes:.0f}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">Open docks</div>'
+        f'<div class="availability-value">{docks:.0f}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">Bike fill</div>'
+        f'<div class="availability-value">{pct_bikes}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">Dock fill</div>'
+        f'<div class="availability-value">{pct_docks}</div>'
+        "</div>"
+        "</div>"
+        '<div class="availability-note">'
+        "Interpretation: high predicted pickup demand combined with low bike "
+        "availability can indicate empty-station risk. High return pressure "
+        "combined with low dock availability can indicate full-station risk. "
+        "We will model those risks directly in Level 3."
+        "</div>"
+        "</div>"
+    )
+
+    st.markdown(panel_html, unsafe_allow_html=True)
 
 def render_forecast_explorer_tab(
     predictions: pd.DataFrame,
+    live_availability: pd.DataFrame,
     selected_station_label: str,
     selected_station_id: str,
     selected_date,
@@ -567,6 +1166,12 @@ def render_forecast_explorer_tab(
         st.markdown(badge_html, unsafe_allow_html=True)
 
     st.write(f"**Selected station:** {selected_station_label}")
+
+    render_live_availability_panel(
+    live_availability,
+    selected_station_id,
+    selected_row["station_name"],
+)
 
     station_day = predictions[
         (predictions["station_id"] == selected_station_id)
@@ -918,12 +1523,22 @@ def main() -> None:
     )
 
     apply_custom_css()
+    apply_product_polish_css()
 
     metadata = load_metadata()
     render_hero(metadata)
     features = load_features()
     station_metadata = load_station_metadata()
     predictions = add_predictions(features, metadata)
+
+    if st.sidebar.button("Refresh live availability"):
+        load_live_availability.clear()
+
+    try:
+        live_availability = load_live_availability()
+    except Exception as error:
+        st.sidebar.warning(f"Live availability unavailable: {error}")
+        live_availability = pd.DataFrame()
 
     (
         selected_station_label,
@@ -948,12 +1563,13 @@ def main() -> None:
 
     with tabs[1]:
         render_forecast_explorer_tab(
-            predictions,
-            selected_station_label,
-            selected_station_id,
-            selected_date,
-            selected_hour,
-        )
+        predictions,
+        live_availability,
+        selected_station_label,
+        selected_station_id,
+        selected_date,
+        selected_hour,
+    )
 
     with tabs[2]:
         render_station_map_tab(
