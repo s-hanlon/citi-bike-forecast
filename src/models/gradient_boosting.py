@@ -51,9 +51,18 @@ WEATHER_FEATURES = [
     "is_precipitating",
 ]
 
+HOLIDAY_FEATURES = [
+    "is_us_federal_holiday",
+    "is_day_before_holiday",
+    "is_day_after_holiday",
+    "is_holiday_window",
+    "days_to_nearest_holiday",
+]
+
 BASE_MODEL_FEATURES = (
     CATEGORICAL_FEATURES
     + BASE_NUMERIC_FEATURES
+    + HOLIDAY_FEATURES
 )
 
 FORECAST_MODEL_FEATURES = (

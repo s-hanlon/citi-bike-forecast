@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.holiday import USFederalHolidayCalendar
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +75,90 @@ def add_weather(
     return features
 
 
+def add_holiday_features(
+    features: pd.DataFrame,
+) -> pd.DataFrame:
+    """Add US federal holiday calendar features."""
+
+    features = features.copy()
+
+    calendar = USFederalHolidayCalendar()
+
+    start_date = (
+        features["timestamp"].min().normalize()
+        - pd.Timedelta(days=7)
+    )
+
+    end_date = (
+        features["timestamp"].max().normalize()
+        + pd.Timedelta(days=7)
+    )
+
+    holidays = calendar.holidays(
+        start=start_date,
+        end=end_date,
+    )
+
+    normalized_dates = features["timestamp"].dt.normalize()
+
+    features["is_us_federal_holiday"] = (
+        normalized_dates.isin(holidays)
+    ).astype("int8")
+
+    features["is_day_before_holiday"] = (
+        (normalized_dates + pd.Timedelta(days=1))
+        .isin(holidays)
+    ).astype("int8")
+
+    features["is_day_after_holiday"] = (
+        (normalized_dates - pd.Timedelta(days=1))
+        .isin(holidays)
+    ).astype("int8")
+
+    features["is_holiday_window"] = (
+        (
+            features["is_us_federal_holiday"]
+            | features["is_day_before_holiday"]
+            | features["is_day_after_holiday"]
+        )
+        .astype("int8")
+    )
+
+    holiday_values = holidays.values.astype("datetime64[D]")
+    date_values = normalized_dates.values.astype("datetime64[D]")
+
+    insertion_points = np.searchsorted(
+        holiday_values,
+        date_values,
+    )
+
+    previous_indices = np.clip(
+        insertion_points - 1,
+        0,
+        len(holiday_values) - 1,
+    )
+
+    next_indices = np.clip(
+        insertion_points,
+        0,
+        len(holiday_values) - 1,
+    )
+
+    days_since_previous_holiday = (
+        date_values - holiday_values[previous_indices]
+    ).astype("timedelta64[D]").astype(int)
+
+    days_until_next_holiday = (
+        holiday_values[next_indices] - date_values
+    ).astype("timedelta64[D]").astype(int)
+
+    features["days_to_nearest_holiday"] = np.minimum(
+        np.abs(days_since_previous_holiday),
+        np.abs(days_until_next_holiday),
+    )
+
+    return features
+
 def build_features(
     pickups: pd.DataFrame,
     weather: pd.DataFrame,
@@ -101,6 +186,8 @@ def build_features(
     features["is_weekend"] = (
         features["day_of_week"] >= 5
     ).astype("int8")
+
+    features = add_holiday_features(features)
 
     features["hour_sin"] = np.sin(
         2 * np.pi * features["hour"] / 24
