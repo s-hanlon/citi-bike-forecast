@@ -1318,6 +1318,214 @@ def render_station_map_tab(
         hide_index=True,
     )
 
+def render_live_network_tab(live_availability: pd.DataFrame) -> None:
+    """Render live Citi Bike availability across the full station network."""
+    st.markdown(
+        '<div class="section-label">Live Availability Network</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        (
+            '<div class="section-subcopy">'
+            "A real-time view of station inventory across the Citi Bike network. "
+            "This tab shows current bike and dock availability, separate from the "
+            "historical forecast explorer."
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if live_availability.empty:
+        st.info("Live availability data is not available right now.")
+        return
+
+    live_data = live_availability.copy()
+
+    live_data = live_data.dropna(
+        subset=["latitude", "longitude"]
+    ).copy()
+
+    status_counts = (
+        live_data["availability_status"]
+        .value_counts()
+        .reset_index()
+    )
+    status_counts.columns = ["availability_status", "station_count"]
+    status_counts["status_label"] = status_counts[
+        "availability_status"
+    ].apply(format_availability_status)
+
+    total_stations = len(live_data)
+    empty_or_nearly_empty = live_data[
+        live_data["availability_status"].isin(
+            ["empty", "nearly_empty", "low_bikes"]
+        )
+    ]
+    full_or_nearly_full = live_data[
+        live_data["availability_status"].isin(
+            ["full", "nearly_full", "low_docks"]
+        )
+    ]
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Live stations", f"{total_stations:,}")
+    col2.metric("Healthy", f"{(live_data['availability_status'] == 'healthy').sum():,}")
+    col3.metric("Bike shortage risk", f"{len(empty_or_nearly_empty):,}")
+    col4.metric("Dock shortage risk", f"{len(full_or_nearly_full):,}")
+
+    st.markdown(
+        '<div class="section-label">Network Status Map</div>',
+        unsafe_allow_html=True,
+    )
+
+    status_color_map = {
+        "healthy": "#22C55E",
+        "nearly_empty": "#F59E0B",
+        "low_bikes": "#F59E0B",
+        "empty": "#EF4444",
+        "nearly_full": "#A855F7",
+        "low_docks": "#A855F7",
+        "full": "#EC4899",
+        "station_offline": "#64748B",
+        "station_not_installed": "#334155",
+    }
+
+    live_data["status_label"] = live_data[
+        "availability_status"
+    ].apply(format_availability_status)
+
+    fig = px.scatter_mapbox(
+        live_data,
+        lat="latitude",
+        lon="longitude",
+        color="availability_status",
+        size="capacity",
+        hover_name="station_name",
+        hover_data={
+            "capacity": True,
+            "num_bikes_available": True,
+            "num_ebikes_available": True,
+            "num_docks_available": True,
+            "pct_bikes_available": ":.0%",
+            "pct_docks_available": ":.0%",
+            "availability_status": True,
+            "latitude": False,
+            "longitude": False,
+        },
+        color_discrete_map=status_color_map,
+        zoom=10.5,
+        height=650,
+        title="Current Citi Bike Station Availability",
+    )
+
+    fig.update_layout(
+        mapbox_style="carto-darkmatter",
+        margin=dict(l=0, r=0, t=55, b=0),
+        legend_title_text="Availability status",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        '<div class="section-label">Network Risk Tables</div>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write("**Bike shortage risk**")
+        bike_risk = (
+            empty_or_nearly_empty[
+                [
+                    "station_name",
+                    "capacity",
+                    "num_bikes_available",
+                    "num_ebikes_available",
+                    "num_docks_available",
+                    "pct_bikes_available",
+                    "availability_status",
+                ]
+            ]
+            .sort_values(
+                ["num_bikes_available", "pct_bikes_available"],
+                ascending=True,
+            )
+            .head(20)
+            .copy()
+        )
+        bike_risk["availability_status"] = bike_risk[
+            "availability_status"
+        ].apply(format_availability_status)
+
+        st.dataframe(
+            bike_risk,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with col2:
+        st.write("**Dock shortage risk**")
+        dock_risk = (
+            full_or_nearly_full[
+                [
+                    "station_name",
+                    "capacity",
+                    "num_bikes_available",
+                    "num_ebikes_available",
+                    "num_docks_available",
+                    "pct_docks_available",
+                    "availability_status",
+                ]
+            ]
+            .sort_values(
+                ["num_docks_available", "pct_docks_available"],
+                ascending=True,
+            )
+            .head(20)
+            .copy()
+        )
+        dock_risk["availability_status"] = dock_risk[
+            "availability_status"
+        ].apply(format_availability_status)
+
+        st.dataframe(
+            dock_risk,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown(
+        '<div class="section-label">Status Distribution</div>',
+        unsafe_allow_html=True,
+    )
+
+    fig = px.bar(
+        status_counts.sort_values("station_count", ascending=True),
+        x="station_count",
+        y="status_label",
+        orientation="h",
+        title="Live Station Count by Availability Status",
+        labels={
+            "station_count": "Station count",
+            "status_label": "",
+        },
+        text="station_count",
+    )
+
+    fig.update_traces(
+        textposition="outside",
+        cliponaxis=False,
+    )
+
+    fig.update_layout(
+        height=420,
+        margin=dict(l=10, r=40, t=55, b=10),
+        showlegend=False,
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
 
 def render_model_performance_tab() -> None:
     """Render model performance diagnostics."""
@@ -1551,6 +1759,7 @@ def main() -> None:
         [
             "Overview",
             "Forecast Explorer",
+            "Live Network",
             "Station Map",
             "Model Performance",
             "Demand Patterns",
@@ -1563,15 +1772,18 @@ def main() -> None:
 
     with tabs[1]:
         render_forecast_explorer_tab(
-        predictions,
-        live_availability,
-        selected_station_label,
-        selected_station_id,
-        selected_date,
-        selected_hour,
-    )
+            predictions,
+            live_availability,
+            selected_station_label,
+            selected_station_id,
+            selected_date,
+            selected_hour,
+        )
 
     with tabs[2]:
+        render_live_network_tab(live_availability)
+
+    with tabs[3]:
         render_station_map_tab(
             predictions,
             station_metadata,
@@ -1579,13 +1791,13 @@ def main() -> None:
             selected_hour,
         )
 
-    with tabs[3]:
+    with tabs[4]:
         render_model_performance_tab()
 
-    with tabs[4]:
+    with tabs[5]:
         render_demand_patterns_tab(predictions)
 
-    with tabs[5]:
+    with tabs[6]:
         render_about_tab(metadata)
 
 
