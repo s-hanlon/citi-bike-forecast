@@ -1,0 +1,17 @@
+services:
+  db:
+    image: public.ecr.aws/docker/library/postgres:16-alpine
+    container_name: citibike-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: citibike
+      POSTGRES_PASSWORD: citibike_dev_password
+      POSTGRES_DB: citibike
+    ports:
+      - "5432:5432"
+    volumes:
+      - citibike_postgres_data:/var/lib/postgresql/data
+      - ./src/database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+volumes:
+  citibike_postgres_data:
