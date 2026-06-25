@@ -2222,6 +2222,104 @@ def render_historical_availability_tab(selected_station_label: str) -> None:
         hide_index=True,
     )
 
+    st.markdown("### Operational risk rankings")
+
+    ranking_cols = st.columns(2)
+
+    with ranking_cols[0]:
+        st.markdown("#### Most bike shortage risk")
+        bike_risk = top_risk_display.sort_values(
+            by=[
+                "bike_shortage_risk_pct",
+                "empty_snapshots",
+                "bike_shortage_risk_snapshots",
+            ],
+            ascending=[False, False, False],
+        ).head(10)
+
+        st.dataframe(
+            bike_risk[
+                [
+                    "station_name",
+                    "bike_shortage_risk_pct",
+                    "bike_shortage_risk_snapshots",
+                    "empty_snapshots",
+                    "avg_bikes_available",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with ranking_cols[1]:
+        st.markdown("#### Most dock shortage risk")
+        dock_risk = top_risk_display.sort_values(
+            by=[
+                "dock_shortage_risk_pct",
+                "full_snapshots",
+                "dock_shortage_risk_snapshots",
+            ],
+            ascending=[False, False, False],
+        ).head(10)
+
+        st.dataframe(
+            dock_risk[
+                [
+                    "station_name",
+                    "dock_shortage_risk_pct",
+                    "dock_shortage_risk_snapshots",
+                    "full_snapshots",
+                    "avg_docks_available",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    ranking_cols = st.columns(2)
+
+    with ranking_cols[0]:
+        st.markdown("#### Most often empty")
+        empty_risk = top_risk_display.sort_values(
+            by=["empty_snapshots", "bike_shortage_risk_pct"],
+            ascending=[False, False],
+        ).head(10)
+
+        st.dataframe(
+            empty_risk[
+                [
+                    "station_name",
+                    "empty_snapshots",
+                    "bike_shortage_risk_pct",
+                    "avg_bikes_available",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with ranking_cols[1]:
+        st.markdown("#### Most often full")
+        full_risk = top_risk_display.sort_values(
+            by=["full_snapshots", "dock_shortage_risk_pct"],
+            ascending=[False, False],
+        ).head(10)
+
+        st.dataframe(
+            full_risk[
+                [
+                    "station_name",
+                    "full_snapshots",
+                    "dock_shortage_risk_pct",
+                    "avg_docks_available",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+
 def render_demand_patterns_tab(
     predictions: pd.DataFrame,
 ) -> None:
