@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.live.gbfs import fetch_live_station_availability
 from src.models.availability_projection import project_station_availability
 from src.models.flow_forecasting import MODEL_FEATURES as FLOW_MODEL_FEATURES
+from src.database.queries import get_latest_station_availability
 
 MODEL_FILE = PROJECT_ROOT / "models" / "citi_bike_demand_model.joblib"
 METADATA_FILE = (
@@ -157,8 +158,23 @@ def add_predictions(
 
 @st.cache_data(ttl=60)
 def load_live_availability() -> pd.DataFrame:
-    """Load live Citi Bike station availability from GBFS."""
-    return fetch_live_station_availability()
+    """Load latest station availability from Postgres, falling back to GBFS."""
+    try:
+        availability = get_latest_station_availability()
+
+        if not availability.empty:
+            availability["station_id"] = availability["station_id"].astype(str)
+            availability["availability_source"] = "postgres_latest_snapshot"
+            return availability
+
+    except Exception as error:
+        print(f"Postgres availability load failed, falling back to GBFS: {error}")
+
+    availability = fetch_live_station_availability()
+    availability["station_id"] = availability["station_id"].astype(str)
+    availability["availability_source"] = "direct_gbfs"
+
+    return availability
 
 @st.cache_data
 def load_flow_features() -> pd.DataFrame:
@@ -824,6 +840,34 @@ def get_selected_row(
         & (station_data["hour"] == selected_hour)
     ]
 
+def render_availability_source_note(live_availability: pd.DataFrame) -> None:
+    """Render a note describing where availability data came from."""
+    if live_availability.empty:
+        return
+
+    source = live_availability.get(
+        "availability_source",
+        pd.Series(["unknown"]),
+    ).iloc[0]
+
+    if source == "postgres_latest_snapshot" and "snapshot_utc" in live_availability.columns:
+        latest_snapshot = pd.to_datetime(
+            live_availability["snapshot_utc"]
+        ).max()
+
+        source_label = (
+            "Source: Postgres latest stored GBFS snapshot "
+            f"({format_live_timestamp(latest_snapshot)})."
+        )
+    elif source == "direct_gbfs":
+        source_label = "Source: Direct live GBFS fetch."
+    else:
+        source_label = "Source: Availability data loaded."
+
+    st.markdown(
+        f'<div class="section-subcopy">{source_label}</div>',
+        unsafe_allow_html=True,
+    )
 
 def render_overview_tab(
     predictions: pd.DataFrame,
@@ -1089,6 +1133,7 @@ def render_live_availability_panel(
         ),
         unsafe_allow_html=True,
     )
+    render_availability_source_note(live_availability)
 
     if live_availability.empty:
         st.info("Live availability data is not available right now.")
@@ -1553,6 +1598,8 @@ def render_live_network_tab(live_availability: pd.DataFrame) -> None:
     if live_availability.empty:
         st.info("Live availability data is not available right now.")
         return
+    
+    render_availability_source_note(live_availability)
 
     live_data = live_availability.copy()
 
