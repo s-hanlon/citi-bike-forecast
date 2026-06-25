@@ -112,6 +112,32 @@ def get_network_availability_history(hours: int = 24) -> pd.DataFrame:
 
     return query_dataframe(sql, (hours,))
 
+def get_station_availability_history_by_name(
+    station_name: str,
+    hours: int = 24,
+) -> pd.DataFrame:
+    """Fetch recent availability history for one station by station name."""
+    sql = """
+        SELECT
+            s.snapshot_utc,
+            s.station_id,
+            i.station_name,
+            i.capacity,
+            s.num_bikes_available,
+            s.num_ebikes_available,
+            s.num_docks_available,
+            s.pct_bikes_available,
+            s.pct_docks_available,
+            s.availability_status
+        FROM station_status_snapshots AS s
+        LEFT JOIN station_information AS i
+            ON s.station_id = i.station_id
+        WHERE TRIM(LOWER(i.station_name)) = TRIM(LOWER(%s))
+          AND s.snapshot_utc >= NOW() - (%s * INTERVAL '1 hour')
+        ORDER BY s.snapshot_utc;
+    """
+
+    return query_dataframe(sql, (station_name, hours))
 
 def get_top_availability_risk_stations(hours: int = 24, limit: int = 15) -> pd.DataFrame:
     """Fetch stations with the highest recent empty/full risk."""

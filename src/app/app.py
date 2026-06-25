@@ -21,6 +21,7 @@ from src.models.flow_forecasting import MODEL_FEATURES as FLOW_MODEL_FEATURES
 from src.database.queries import (
     get_latest_station_availability,
     get_network_availability_history,
+    get_station_availability_history_by_name,
     get_top_availability_risk_stations,
 )
 
@@ -202,6 +203,17 @@ def load_top_availability_risk_stations(
 ) -> pd.DataFrame:
     """Load stations with the most recent availability risk."""
     return get_top_availability_risk_stations(hours=hours, limit=limit)
+
+@st.cache_data(ttl=60)
+def load_station_availability_history_by_name(
+    station_name: str,
+    hours: int = 24,
+) -> pd.DataFrame:
+    """Load recent availability history for one station from Postgres."""
+    return get_station_availability_history_by_name(
+        station_name=station_name,
+        hours=hours,
+    )
 
 @st.cache_resource
 def load_flow_models():
@@ -1859,7 +1871,7 @@ def render_model_performance_tab() -> None:
         hide_index=True,
     )
 
-def render_historical_availability_tab() -> None:
+def render_historical_availability_tab(selected_station_label: str) -> None:
     """Render historical availability trends from stored Postgres snapshots."""
     st.markdown(
         """
@@ -2035,6 +2047,100 @@ def render_historical_availability_tab() -> None:
     )
 
     st.plotly_chart(fill_fig, use_container_width=True)
+
+    st.markdown("### Selected station availability history")
+
+    selected_station_name = selected_station_label.rsplit(" (", 1)[0]
+
+    try:
+        station_history = load_station_availability_history_by_name(
+            station_name=selected_station_name,
+            hours=history_hours,
+        )
+    except Exception as error:
+        st.warning(f"Selected station history could not be loaded: {error}")
+        station_history = pd.DataFrame()
+
+    if station_history.empty:
+        st.info(
+            f"No stored availability history found for {selected_station_name}. "
+            "This may happen if the live GBFS station name does not exactly match the historical trip-data name."
+        )
+    else:
+        station_history = station_history.copy()
+        station_history["snapshot_utc"] = pd.to_datetime(
+            station_history["snapshot_utc"],
+        )
+
+        for column in [
+            "num_bikes_available",
+            "num_ebikes_available",
+            "num_docks_available",
+            "capacity",
+        ]:
+            station_history[column] = pd.to_numeric(
+                station_history[column],
+                errors="coerce",
+            )
+
+        station_inventory_history = station_history[
+            [
+                "snapshot_utc",
+                "num_bikes_available",
+                "num_ebikes_available",
+                "num_docks_available",
+            ]
+        ].melt(
+            id_vars="snapshot_utc",
+            var_name="inventory_type",
+            value_name="count",
+        )
+
+        station_inventory_history["inventory_type"] = station_inventory_history[
+            "inventory_type"
+        ].map(
+            {
+                "num_bikes_available": "Bikes available",
+                "num_ebikes_available": "E-bikes available",
+                "num_docks_available": "Docks available",
+            }
+        )
+
+        station_fig = px.line(
+            station_inventory_history,
+            x="snapshot_utc",
+            y="count",
+            color="inventory_type",
+            markers=True,
+            labels={
+                "snapshot_utc": "Snapshot time",
+                "count": "Count",
+                "inventory_type": "Inventory type",
+            },
+            title=f"{selected_station_name} inventory over time",
+        )
+
+        station_fig.update_layout(
+            margin=dict(l=20, r=20, t=60, b=20),
+            hovermode="x unified",
+        )
+
+        st.plotly_chart(station_fig, use_container_width=True)
+
+        latest_station_row = station_history.iloc[-1]
+
+        st.markdown(
+            f"""
+            <div class="section-subcopy">
+                Latest status for <b>{selected_station_name}</b>:
+                {latest_station_row["availability_status"]},
+                {latest_station_row["num_bikes_available"]:.0f} bikes,
+                {latest_station_row["num_ebikes_available"]:.0f} e-bikes,
+                {latest_station_row["num_docks_available"]:.0f} docks.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.markdown("### Top recent problem stations")
 
@@ -2287,7 +2393,7 @@ def main() -> None:
         render_live_network_tab(live_availability)
     
     with tabs[3]:
-        render_historical_availability_tab()
+        render_historical_availability_tab(selected_station_label)
 
     with tabs[4]:
         render_station_map_tab(
