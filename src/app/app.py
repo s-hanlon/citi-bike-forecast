@@ -21,6 +21,7 @@ from src.models.flow_forecasting import MODEL_FEATURES as FLOW_MODEL_FEATURES
 from src.database.queries import (
     get_latest_station_availability,
     get_network_availability_history,
+    get_snapshot_summary,
     get_station_availability_history_by_name,
     get_top_availability_risk_stations,
 )
@@ -195,6 +196,10 @@ def load_network_availability_history(hours: int = 24) -> pd.DataFrame:
     """Load recent network availability history from Postgres."""
     return get_network_availability_history(hours=hours)
 
+@st.cache_data(ttl=60)
+def load_availability_snapshot_summary() -> pd.DataFrame:
+    """Load availability snapshot summary from Postgres."""
+    return get_snapshot_summary()
 
 @st.cache_data(ttl=60)
 def load_top_availability_risk_stations(
@@ -1107,6 +1112,40 @@ def format_live_timestamp(value) -> str:
         "%b %d, %Y %I:%M %p ET"
     )
 
+def render_collector_status() -> None:
+    """Render collector freshness status in the sidebar."""
+    try:
+        summary = load_availability_snapshot_summary()
+    except Exception as error:
+        st.sidebar.warning(f"Collector status unavailable: {error}")
+        return
+
+    if summary.empty:
+        st.sidebar.warning("No availability snapshots stored yet.")
+        return
+
+    row = summary.iloc[0]
+
+    latest_snapshot = pd.to_datetime(
+        row["latest_snapshot_utc"],
+        utc=True,
+    )
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    age_minutes = (now_utc - latest_snapshot).total_seconds() / 60
+
+    if age_minutes <= 7:
+        status_label = "Fresh"
+    elif age_minutes <= 20:
+        status_label = "Slightly stale"
+    else:
+        status_label = "Stale"
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Collector Status")
+    st.sidebar.metric("Status", status_label)
+    st.sidebar.metric("Snapshot Age", f"{age_minutes:.1f} min")
+    st.sidebar.metric("Stored Snapshots", f"{int(row['snapshot_count']):,}")
 
 def format_availability_status(status: str) -> str:
     """Format an availability status label."""
@@ -2346,12 +2385,18 @@ def main() -> None:
 
     if st.sidebar.button("Refresh live availability"):
         load_live_availability.clear()
+        load_availability_snapshot_summary.clear()
+        load_network_availability_history.clear()
+        load_top_availability_risk_stations.clear()
+        load_station_availability_history_by_name.clear()
 
     try:
         live_availability = load_live_availability()
     except Exception as error:
         st.sidebar.warning(f"Live availability unavailable: {error}")
         live_availability = pd.DataFrame()
+    
+    render_collector_status()
 
     (
         selected_station_label,
@@ -2359,6 +2404,8 @@ def main() -> None:
         selected_date,
         selected_hour,
     ) = build_sidebar_controls(predictions)
+
+    
 
     tabs = st.tabs(
         [
