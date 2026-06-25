@@ -75,11 +75,152 @@ def get_snapshot_summary() -> pd.DataFrame:
 
     return query_dataframe(sql)
 
+def get_network_availability_history(hours: int = 24) -> pd.DataFrame:
+    """Fetch network-level availability metrics over recent snapshots."""
+    sql = """
+        SELECT
+            snapshot_utc,
+            COUNT(*) AS station_count,
+
+            SUM(CASE WHEN availability_status = 'healthy' THEN 1 ELSE 0 END)
+                AS healthy_stations,
+
+            SUM(CASE
+                WHEN availability_status IN ('empty', 'nearly_empty', 'low_bikes')
+                THEN 1 ELSE 0
+            END) AS bike_shortage_risk_stations,
+
+            SUM(CASE
+                WHEN availability_status IN ('full', 'nearly_full', 'low_docks')
+                THEN 1 ELSE 0
+            END) AS dock_shortage_risk_stations,
+
+            SUM(CASE WHEN availability_status = 'empty' THEN 1 ELSE 0 END)
+                AS empty_stations,
+
+            SUM(CASE WHEN availability_status = 'full' THEN 1 ELSE 0 END)
+                AS full_stations,
+
+            AVG(pct_bikes_available) AS avg_pct_bikes_available,
+            AVG(pct_docks_available) AS avg_pct_docks_available
+
+        FROM station_status_snapshots
+        WHERE snapshot_utc >= NOW() - (%s * INTERVAL '1 hour')
+        GROUP BY snapshot_utc
+        ORDER BY snapshot_utc;
+    """
+
+    return query_dataframe(sql, (hours,))
+
+
+def get_top_availability_risk_stations(hours: int = 24, limit: int = 15) -> pd.DataFrame:
+    """Fetch stations with the highest recent empty/full risk."""
+    sql = """
+        SELECT
+            s.station_id,
+            i.station_name,
+            i.latitude,
+            i.longitude,
+            i.capacity,
+
+            COUNT(*) AS snapshots,
+
+            SUM(CASE
+                WHEN s.availability_status IN ('empty', 'nearly_empty', 'low_bikes')
+                THEN 1 ELSE 0
+            END) AS bike_shortage_risk_snapshots,
+
+            SUM(CASE
+                WHEN s.availability_status IN ('full', 'nearly_full', 'low_docks')
+                THEN 1 ELSE 0
+            END) AS dock_shortage_risk_snapshots,
+
+            SUM(CASE WHEN s.availability_status = 'empty' THEN 1 ELSE 0 END)
+                AS empty_snapshots,
+
+            SUM(CASE WHEN s.availability_status = 'full' THEN 1 ELSE 0 END)
+                AS full_snapshots,
+
+            ROUND(
+                100.0 * SUM(CASE
+                    WHEN s.availability_status IN ('empty', 'nearly_empty', 'low_bikes')
+                    THEN 1 ELSE 0
+                END) / COUNT(*),
+                1
+            ) AS bike_shortage_risk_pct,
+
+            ROUND(
+                100.0 * SUM(CASE
+                    WHEN s.availability_status IN ('full', 'nearly_full', 'low_docks')
+                    THEN 1 ELSE 0
+                END) / COUNT(*),
+                1
+            ) AS dock_shortage_risk_pct,
+
+            AVG(s.num_bikes_available) AS avg_bikes_available,
+            AVG(s.num_docks_available) AS avg_docks_available
+
+        FROM station_status_snapshots AS s
+        LEFT JOIN station_information AS i
+            ON s.station_id = i.station_id
+        WHERE s.snapshot_utc >= NOW() - (%s * INTERVAL '1 hour')
+        GROUP BY
+            s.station_id,
+            i.station_name,
+            i.latitude,
+            i.longitude,
+            i.capacity
+        ORDER BY
+            (
+                SUM(CASE
+                    WHEN s.availability_status IN (
+                        'empty',
+                        'nearly_empty',
+                        'low_bikes',
+                        'full',
+                        'nearly_full',
+                        'low_docks'
+                    )
+                    THEN 1 ELSE 0
+                END)
+            ) DESC,
+            s.station_id
+        LIMIT %s;
+    """
+
+    return query_dataframe(sql, (hours, limit))
+
+
+def get_station_availability_history(station_id: str, hours: int = 24) -> pd.DataFrame:
+    """Fetch recent availability history for one station."""
+    sql = """
+        SELECT
+            s.snapshot_utc,
+            s.station_id,
+            i.station_name,
+            i.capacity,
+            s.num_bikes_available,
+            s.num_ebikes_available,
+            s.num_docks_available,
+            s.pct_bikes_available,
+            s.pct_docks_available,
+            s.availability_status
+        FROM station_status_snapshots AS s
+        LEFT JOIN station_information AS i
+            ON s.station_id = i.station_id
+        WHERE s.station_id = %s
+          AND s.snapshot_utc >= NOW() - (%s * INTERVAL '1 hour')
+        ORDER BY s.snapshot_utc;
+    """
+
+    return query_dataframe(sql, (station_id, hours))
 
 def main() -> None:
     """Smoke test Postgres availability queries."""
     summary = get_snapshot_summary()
     latest = get_latest_station_availability()
+    network_history = get_network_availability_history(hours=24)
+    top_risk = get_top_availability_risk_stations(hours=24, limit=10)
 
     print("Snapshot summary:")
     print(summary.to_string(index=False))
@@ -93,20 +234,24 @@ def main() -> None:
     print(latest["availability_status"].value_counts().to_string())
     print()
 
-    print("Sample:")
+    print("Network availability history:")
+    print(network_history.tail(10).to_string(index=False))
+    print()
+
+    print("Top recent risk stations:")
     print(
-        latest[
+        top_risk[
             [
                 "station_name",
-                "capacity",
-                "num_bikes_available",
-                "num_ebikes_available",
-                "num_docks_available",
-                "availability_status",
+                "snapshots",
+                "bike_shortage_risk_snapshots",
+                "dock_shortage_risk_snapshots",
+                "empty_snapshots",
+                "full_snapshots",
+                "bike_shortage_risk_pct",
+                "dock_shortage_risk_pct",
             ]
-        ]
-        .head(15)
-        .to_string(index=False)
+        ].to_string(index=False)
     )
 
 
