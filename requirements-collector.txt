@@ -1,0 +1,3 @@
+pandas
+requests
+psycopg[binary]

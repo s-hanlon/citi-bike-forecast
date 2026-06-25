@@ -13,5 +13,17 @@ services:
       - citibike_postgres_data:/var/lib/postgresql/data
       - ./src/database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
 
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    container_name: citibike-collector
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://citibike:citibike_dev_password@db:5432/citibike
+    command: python src/data/collect_station_status_db.py --interval-minutes 5 --max-snapshots 0
+
 volumes:
   citibike_postgres_data:
