@@ -16,6 +16,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from src.live.gbfs import fetch_live_station_availability
+from src.models.availability_projection import project_station_availability
+from src.models.flow_forecasting import MODEL_FEATURES as FLOW_MODEL_FEATURES
 
 MODEL_FILE = PROJECT_ROOT / "models" / "citi_bike_demand_model.joblib"
 METADATA_FILE = (
@@ -82,6 +84,25 @@ MAY_BENCHMARK = pd.DataFrame(
     columns=["model", "mae", "rmse"],
 )
 
+FLOW_FEATURE_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "flow_model_features.parquet"
+)
+
+PICKUP_FLOW_MODEL_FILE = (
+    PROJECT_ROOT
+    / "models"
+    / "citi_bike_pickup_flow_model.joblib"
+)
+
+RETURN_FLOW_MODEL_FILE = (
+    PROJECT_ROOT
+    / "models"
+    / "citi_bike_return_flow_model.joblib"
+)
+
 pio.templates.default = "plotly_dark"
 
 @st.cache_resource
@@ -138,6 +159,24 @@ def add_predictions(
 def load_live_availability() -> pd.DataFrame:
     """Load live Citi Bike station availability from GBFS."""
     return fetch_live_station_availability()
+
+@st.cache_data
+def load_flow_features() -> pd.DataFrame:
+    """Load pickup/return flow model feature table."""
+    flow_features = pd.read_parquet(FLOW_FEATURE_FILE)
+    flow_features["station_id"] = flow_features["station_id"].astype(str)
+    flow_features["timestamp"] = pd.to_datetime(flow_features["timestamp"])
+
+    return flow_features
+
+
+@st.cache_resource
+def load_flow_models():
+    """Load final pickup and return flow models."""
+    pickup_model = joblib.load(PICKUP_FLOW_MODEL_FILE)
+    return_model = joblib.load(RETURN_FLOW_MODEL_FILE)
+
+    return pickup_model, return_model
 
 def apply_custom_css() -> None:
     """Apply custom dashboard styling."""
@@ -737,6 +776,37 @@ def build_sidebar_controls(
         selected_hour,
     )
 
+def find_live_station_availability(
+    live_availability: pd.DataFrame,
+    selected_station_id: str,
+    selected_station_name: str,
+) -> pd.DataFrame:
+    """Find a live GBFS row using station ID first, then station name."""
+    if live_availability.empty:
+        return pd.DataFrame()
+
+    live_data = live_availability.copy()
+    live_data["station_id"] = live_data["station_id"].astype(str)
+    live_data["station_name_normalized"] = live_data["station_name"].apply(
+        normalize_station_name
+    )
+
+    selected_station_id = str(selected_station_id)
+    selected_station_name_normalized = normalize_station_name(
+        selected_station_name
+    )
+
+    selected_live = live_data[
+        live_data["station_id"] == selected_station_id
+    ]
+
+    if selected_live.empty:
+        selected_live = live_data[
+            live_data["station_name_normalized"]
+            == selected_station_name_normalized
+        ]
+
+    return selected_live
 
 def get_selected_row(
     predictions: pd.DataFrame,
@@ -977,10 +1047,24 @@ def availability_status_class(status: str) -> str:
     if status in {"healthy"}:
         return "status-good"
 
-    if status in {"nearly_empty", "nearly_full", "low_bikes", "low_docks"}:
+    if status in {
+        "nearly_empty",
+        "nearly_full",
+        "low_bikes",
+        "low_docks",
+        "nearly_empty_risk",
+        "nearly_full_risk",
+    }:
         return "status-warning"
 
-    if status in {"empty", "full", "station_offline", "station_not_installed"}:
+    if status in {
+        "empty",
+        "full",
+        "station_offline",
+        "station_not_installed",
+        "empty_risk",
+        "full_risk",
+    }:
         return "status-danger"
 
     return "status-neutral"
@@ -1114,9 +1198,130 @@ def render_live_availability_panel(
 
     st.markdown(panel_html, unsafe_allow_html=True)
 
+def render_availability_projection_panel(
+    live_availability: pd.DataFrame,
+    flow_features: pd.DataFrame,
+    pickup_flow_model,
+    return_flow_model,
+    selected_station_id: str,
+    selected_station_name: str,
+    selected_timestamp,
+) -> None:
+    """Render prototype future availability projection."""
+    st.markdown(
+        '<div class="section-label">Prototype Availability Projection</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        (
+            '<div class="section-subcopy">'
+            "This combines live station inventory with model-predicted pickup "
+            "and return pressure for the selected station-hour pattern. "
+            "The current version is a prototype because the demand features "
+            "come from a historical row, while the station inventory is live."
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    selected_live = find_live_station_availability(
+        live_availability=live_availability,
+        selected_station_id=selected_station_id,
+        selected_station_name=selected_station_name,
+    )
+
+    if selected_live.empty:
+        st.info("Live station inventory was not found for this station.")
+        return
+
+    selected_flow_row = flow_features[
+        (flow_features["station_id"].astype(str) == str(selected_station_id))
+        & (flow_features["timestamp"] == pd.to_datetime(selected_timestamp))
+    ]
+
+    if selected_flow_row.empty:
+        st.info(
+            "No pickup/return flow feature row exists for this selected station-hour."
+        )
+        return
+
+    live_row = selected_live.iloc[0]
+    flow_row = selected_flow_row.iloc[[0]]
+
+    predicted_pickups = float(
+        pickup_flow_model.predict(flow_row[FLOW_MODEL_FEATURES])[0]
+    )
+    predicted_returns = float(
+        return_flow_model.predict(flow_row[FLOW_MODEL_FEATURES])[0]
+    )
+
+    predicted_pickups = max(0, predicted_pickups)
+    predicted_returns = max(0, predicted_returns)
+
+    current_bikes = float(live_row["num_bikes_available"])
+    current_docks = float(live_row["num_docks_available"])
+    capacity = float(live_row["capacity"])
+
+    projection = project_station_availability(
+        current_bikes=current_bikes,
+        current_docks=current_docks,
+        capacity=capacity,
+        predicted_pickups=predicted_pickups,
+        predicted_returns=predicted_returns,
+    )
+
+    risk_label = format_availability_status(projection.risk_status)
+    risk_class = availability_status_class(projection.risk_status)
+
+    projection_html = (
+        '<div class="availability-panel">'
+        '<div class="availability-header">'
+        "<div>"
+        '<div class="availability-title">One-Hour Availability Projection</div>'
+        '<div class="availability-subtitle">'
+        "Projected station state after applying predicted pickups and returns."
+        "</div>"
+        "</div>"
+        f'<div class="status-pill {risk_class}">{risk_label}</div>'
+        "</div>"
+        '<div class="availability-grid">'
+        '<div class="availability-card">'
+        '<div class="availability-label">Current bikes</div>'
+        f'<div class="availability-value">{projection.current_bikes:.0f}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">Predicted pickups</div>'
+        f'<div class="availability-value">{projection.predicted_pickups:.1f}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">Predicted returns</div>'
+        f'<div class="availability-value">{projection.predicted_returns:.1f}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">Projected bikes</div>'
+        f'<div class="availability-value">{projection.projected_bikes:.1f}</div>'
+        "</div>"
+        '<div class="availability-card">'
+        '<div class="availability-label">Projected docks</div>'
+        f'<div class="availability-value">{projection.projected_docks:.1f}</div>'
+        "</div>"
+        "</div>"
+        '<div class="availability-note">'
+        "Formula: projected bikes = current bikes + predicted returns - predicted pickups. "
+        "Projected docks move in the opposite direction. This is the core logic "
+        "for the future live availability-risk model."
+        "</div>"
+        "</div>"
+    )
+
+    st.markdown(projection_html, unsafe_allow_html=True)
+
 def render_forecast_explorer_tab(
     predictions: pd.DataFrame,
     live_availability: pd.DataFrame,
+    flow_features: pd.DataFrame,
+    pickup_flow_model,
+    return_flow_model,
     selected_station_label: str,
     selected_station_id: str,
     selected_date,
@@ -1168,10 +1373,20 @@ def render_forecast_explorer_tab(
     st.write(f"**Selected station:** {selected_station_label}")
 
     render_live_availability_panel(
-    live_availability,
-    selected_station_id,
-    selected_row["station_name"],
-)
+        live_availability,
+        selected_station_id,
+        selected_row["station_name"],
+    )
+    
+    render_availability_projection_panel(
+        live_availability=live_availability,
+        flow_features=flow_features,
+        pickup_flow_model=pickup_flow_model,
+        return_flow_model=return_flow_model,
+        selected_station_id=selected_station_id,
+        selected_station_name=selected_row["station_name"],
+        selected_timestamp=selected_row["timestamp"],
+    )
 
     station_day = predictions[
         (predictions["station_id"] == selected_station_id)
@@ -1723,6 +1938,7 @@ def render_about_tab(metadata: dict) -> None:
     st.json(metadata_display)
 
 
+
 def main() -> None:
     st.set_page_config(
         page_title="Citi Bike Demand Forecasting",
@@ -1738,6 +1954,8 @@ def main() -> None:
     features = load_features()
     station_metadata = load_station_metadata()
     predictions = add_predictions(features, metadata)
+    flow_features = load_flow_features()
+    pickup_flow_model, return_flow_model = load_flow_models()
 
     if st.sidebar.button("Refresh live availability"):
         load_live_availability.clear()
@@ -1774,6 +1992,9 @@ def main() -> None:
         render_forecast_explorer_tab(
             predictions,
             live_availability,
+            flow_features,
+            pickup_flow_model,
+            return_flow_model,
             selected_station_label,
             selected_station_id,
             selected_date,
