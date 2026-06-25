@@ -18,7 +18,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.live.gbfs import fetch_live_station_availability
 from src.models.availability_projection import project_station_availability
 from src.models.flow_forecasting import MODEL_FEATURES as FLOW_MODEL_FEATURES
-from src.database.queries import get_latest_station_availability
+from src.database.queries import (
+    get_latest_station_availability,
+    get_network_availability_history,
+    get_top_availability_risk_stations,
+)
 
 MODEL_FILE = PROJECT_ROOT / "models" / "citi_bike_demand_model.joblib"
 METADATA_FILE = (
@@ -185,6 +189,19 @@ def load_flow_features() -> pd.DataFrame:
 
     return flow_features
 
+@st.cache_data(ttl=60)
+def load_network_availability_history(hours: int = 24) -> pd.DataFrame:
+    """Load recent network availability history from Postgres."""
+    return get_network_availability_history(hours=hours)
+
+
+@st.cache_data(ttl=60)
+def load_top_availability_risk_stations(
+    hours: int = 24,
+    limit: int = 20,
+) -> pd.DataFrame:
+    """Load stations with the most recent availability risk."""
+    return get_top_availability_risk_stations(hours=hours, limit=limit)
 
 @st.cache_resource
 def load_flow_models():
@@ -1842,6 +1859,223 @@ def render_model_performance_tab() -> None:
         hide_index=True,
     )
 
+def render_historical_availability_tab() -> None:
+    """Render historical availability trends from stored Postgres snapshots."""
+    st.markdown(
+        """
+        <div class="section-header">Historical Availability</div>
+        <div class="section-subcopy">
+            This view uses stored GBFS snapshots from Postgres to show how bike and dock availability risk evolves over time.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    history_hours = st.selectbox(
+        "History window",
+        options=[1, 6, 12, 24, 72],
+        index=3,
+        format_func=lambda value: f"Last {value} hour{'s' if value != 1 else ''}",
+    )
+
+    try:
+        network_history = load_network_availability_history(hours=history_hours)
+        top_risk = load_top_availability_risk_stations(
+            hours=history_hours,
+            limit=20,
+        )
+    except Exception as error:
+        st.warning(f"Historical availability data could not be loaded: {error}")
+        return
+
+    if network_history.empty:
+        st.info(
+            "No historical availability snapshots are available yet. "
+            "Keep the collector running and this tab will populate over time."
+        )
+        return
+
+    network_history = network_history.copy()
+    network_history["snapshot_utc"] = pd.to_datetime(
+        network_history["snapshot_utc"],
+    )
+
+    numeric_columns = [
+        "station_count",
+        "healthy_stations",
+        "bike_shortage_risk_stations",
+        "dock_shortage_risk_stations",
+        "empty_stations",
+        "full_stations",
+        "avg_pct_bikes_available",
+        "avg_pct_docks_available",
+    ]
+
+    for column in numeric_columns:
+        if column in network_history.columns:
+            network_history[column] = pd.to_numeric(
+                network_history[column],
+                errors="coerce",
+            )
+
+    latest_snapshot = network_history.iloc[-1]
+
+    metric_cols = st.columns(5)
+    metric_cols[0].metric(
+        "Snapshots",
+        f"{len(network_history):,}",
+    )
+    metric_cols[1].metric(
+        "Healthy Stations",
+        f"{latest_snapshot['healthy_stations']:,.0f}",
+    )
+    metric_cols[2].metric(
+        "Bike Shortage Risk",
+        f"{latest_snapshot['bike_shortage_risk_stations']:,.0f}",
+    )
+    metric_cols[3].metric(
+        "Dock Shortage Risk",
+        f"{latest_snapshot['dock_shortage_risk_stations']:,.0f}",
+    )
+    metric_cols[4].metric(
+        "Latest Snapshot",
+        format_live_timestamp(latest_snapshot["snapshot_utc"]),
+    )
+
+    st.markdown("### Risk over time")
+
+    risk_history = network_history[
+        [
+            "snapshot_utc",
+            "bike_shortage_risk_stations",
+            "dock_shortage_risk_stations",
+            "empty_stations",
+            "full_stations",
+        ]
+    ].melt(
+        id_vars="snapshot_utc",
+        var_name="risk_type",
+        value_name="station_count",
+    )
+
+    risk_history["risk_type"] = risk_history["risk_type"].map(
+        {
+            "bike_shortage_risk_stations": "Bike shortage risk",
+            "dock_shortage_risk_stations": "Dock shortage risk",
+            "empty_stations": "Empty stations",
+            "full_stations": "Full stations",
+        }
+    )
+
+    risk_fig = px.line(
+        risk_history,
+        x="snapshot_utc",
+        y="station_count",
+        color="risk_type",
+        markers=True,
+        labels={
+            "snapshot_utc": "Snapshot time",
+            "station_count": "Stations",
+            "risk_type": "Risk type",
+        },
+        title="Network availability risk over time",
+    )
+
+    risk_fig.update_layout(
+        margin=dict(l=20, r=20, t=60, b=20),
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(risk_fig, use_container_width=True)
+
+    st.markdown("### Average fill levels over time")
+
+    fill_history = network_history[
+        [
+            "snapshot_utc",
+            "avg_pct_bikes_available",
+            "avg_pct_docks_available",
+        ]
+    ].copy()
+
+    fill_history["avg_pct_bikes_available"] *= 100
+    fill_history["avg_pct_docks_available"] *= 100
+
+    fill_history = fill_history.melt(
+        id_vars="snapshot_utc",
+        var_name="metric",
+        value_name="percent",
+    )
+
+    fill_history["metric"] = fill_history["metric"].map(
+        {
+            "avg_pct_bikes_available": "Average bike fill %",
+            "avg_pct_docks_available": "Average dock fill %",
+        }
+    )
+
+    fill_fig = px.line(
+        fill_history,
+        x="snapshot_utc",
+        y="percent",
+        color="metric",
+        markers=True,
+        labels={
+            "snapshot_utc": "Snapshot time",
+            "percent": "Percent",
+            "metric": "Metric",
+        },
+        title="Average network bike and dock availability",
+    )
+
+    fill_fig.update_layout(
+        margin=dict(l=20, r=20, t=60, b=20),
+        hovermode="x unified",
+        yaxis_ticksuffix="%",
+    )
+
+    st.plotly_chart(fill_fig, use_container_width=True)
+
+    st.markdown("### Top recent problem stations")
+
+    if top_risk.empty:
+        st.info("No station-level risk data is available for this window yet.")
+        return
+
+    top_risk_display = top_risk.copy()
+
+    display_numeric_columns = [
+        "bike_shortage_risk_pct",
+        "dock_shortage_risk_pct",
+        "avg_bikes_available",
+        "avg_docks_available",
+    ]
+
+    for column in display_numeric_columns:
+        if column in top_risk_display.columns:
+            top_risk_display[column] = pd.to_numeric(
+                top_risk_display[column],
+                errors="coerce",
+            ).round(1)
+
+    st.dataframe(
+        top_risk_display[
+            [
+                "station_name",
+                "snapshots",
+                "bike_shortage_risk_snapshots",
+                "dock_shortage_risk_snapshots",
+                "empty_snapshots",
+                "full_snapshots",
+                "bike_shortage_risk_pct",
+                "dock_shortage_risk_pct",
+                "avg_bikes_available",
+                "avg_docks_available",
+            ]
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
 
 def render_demand_patterns_tab(
     predictions: pd.DataFrame,
@@ -2025,6 +2259,7 @@ def main() -> None:
             "Overview",
             "Forecast Explorer",
             "Live Network",
+            "Historical Availability",
             "Station Map",
             "Model Performance",
             "Demand Patterns",
@@ -2050,8 +2285,11 @@ def main() -> None:
 
     with tabs[2]:
         render_live_network_tab(live_availability)
-
+    
     with tabs[3]:
+        render_historical_availability_tab()
+
+    with tabs[4]:
         render_station_map_tab(
             predictions,
             station_metadata,
@@ -2059,13 +2297,13 @@ def main() -> None:
             selected_hour,
         )
 
-    with tabs[4]:
+    with tabs[5]:
         render_model_performance_tab()
 
-    with tabs[5]:
+    with tabs[6]:
         render_demand_patterns_tab(predictions)
 
-    with tabs[6]:
+    with tabs[7]:
         render_about_tab(metadata)
 
 
